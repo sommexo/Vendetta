@@ -83,3 +83,52 @@ pvp:
   death-penalty: 2500
   # A killer cannot earn Marks or inflict the Marks penalty by repeatedly killing the same victim.
   repeat-kill-cooldown-seconds: 600
+vanguard:
+  berserker:
+    dormant-multiplier: 1.10
+    imperfect-multiplier: 1.25
+    perfect-multiplier: 1.50
+    perfect-critical-multiplier: 1.75
+  headweb:
+    dormant-window-ms: 1000
+    awakened-window-ms: 2000
+    cooldown-seconds: 12
+    web-duration-ticks: 40
+    web-break-distance-blocks: 2
+    web-slow-amplifier: 2
+    finisher-damage: 4.0
+    weakness-duration-seconds: 3
+    weakness-amplifier: 0
+  ultimate:
+    dormant-duration-seconds: 10
+    dormant-cooldown-seconds: 240
+    awakened-cooldown-seconds: 480
+    dormant-strength-level: 1
+    dormant-speed-level: 1
+    awakened-strength-level: 2
+    awakened-speed-level: 2
+    awakened-fire-resistance: true
+    combat-timeout-seconds: 10
+    ally-duration-seconds: 6
+    ally-range-blocks: 16
+    ally-strength-level: 2
+    ally-speed-level: 1
+    ascendant-starting-strength: 2
+    ascendant-strength-cap: 4
+    ascendant-strength-refresh-seconds: 60
+relics:
+  ascendant-mark-cost: 250
+  exploration-drop-chance: 0.002
+  exploration-perfect-chance: 0.05
+  cleric:
+    level-2-chance: 0.35
+  prices:
+    level-1: 100
+    level-2: 250
+    level-3: 500
+bounties:
+  max-items-per-type-per-target: 4096
+  # Used only to compare unlike bounty items when choosing the Prime Target.
+  value:
+    diamond: 1
+    nether-star: 9
