@@ -1,0 +1,85 @@
+rewards:
+  # Bosses take precedence over the other mob lists.
+  boss: 300
+  hostile: 10
+  passive: 5
+  boss-mobs:
+    - ENDER_DRAGON
+    - WITHER
+    - WARDEN
+    - ELDER_GUARDIAN
+    - PIGLIN_BRUTE
+  # Hostile mobs pay less to make common farms less profitable.
+  hostile-mobs:
+    - ZOMBIE
+    - HUSK
+    - DROWNED
+    - ZOMBIE_VILLAGER
+    - SKELETON
+    - STRAY
+    - CREEPER
+    - SPIDER
+    - CAVE_SPIDER
+    - SLIME
+    - MAGMA_CUBE
+    - PHANTOM
+    - WITCH
+    - ENDERMAN
+    - SILVERFISH
+    - ENDERMITE
+    - VEX
+    - EVOKER
+    - VINDICATOR
+    - PILLAGER
+    - RAVAGER
+    - BLAZE
+    - GHAST
+    - HOGLIN
+    - ZOGLIN
+    - PIGLIN
+    - GUARDIAN
+    - SHULKER
+    - BREEZE
+    - BOGGED
+  # Only mobs explicitly listed here pay the passive reward.
+  passive-mobs:
+    - COW
+    - MOOSHROOM
+    - PIG
+    - SHEEP
+    - CHICKEN
+    - RABBIT
+    - COD
+    - SALMON
+    - TROPICAL_FISH
+    - PUFFERFISH
+    - SQUID
+    - GLOW_SQUID
+    - TURTLE
+    - HORSE
+    - DONKEY
+    - MULE
+    - LLAMA
+    - TRADER_LLAMA
+    - CAMEL
+    - SNIFFER
+    - ARMADILLO
+    - BEE
+    - FOX
+    - GOAT
+    - OCELOT
+    - PANDA
+    - POLAR_BEAR
+    - WOLF
+    - CAT
+    - PARROT
+    - ALLAY
+    - AXOLOTL
+    - FROG
+    - HAPPY_GHAST
+pvp:
+  base-reward: 500
+  bounty-percent: 0.25
+  death-penalty: 2500
+  # A killer cannot earn Marks or inflict the Marks penalty by repeatedly killing the same victim.
+  repeat-kill-cooldown-seconds: 600

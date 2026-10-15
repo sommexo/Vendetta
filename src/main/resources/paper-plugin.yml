@@ -1,0 +1,26 @@
+name: VenMark
+description: Vendetta SMP Marks economy
+prefix: Vendetta
+version: '${version}'
+
+main: dev.prc.vendetta.mark
+bootstrapper: dev.prc.vendetta.markBootstrap
+loader: dev.prc.vendetta.markLoader
+api-version: '26.3'
+load: STARTUP
+
+commands:
+  marks:
+    description: View your Marks balance
+    usage: /marks
+    permission: venmark.use
+
+permissions:
+  venmark.use:
+    description: View your Marks balance
+    default: true
+  venmark.admin:
+    description: Reload VenMark configuration and inspect online balances
+    default: op
+
+authors: [ Sommexo_ ]
