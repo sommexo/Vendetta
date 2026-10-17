@@ -14,10 +14,10 @@ final class VanguardProgression {
     static final class PlayerData {
         boolean vanguard;
         Upgrade berserker = Upgrade.DORMANT;
-        Upgrade headweb = Upgrade.DORMANT;
+        Upgrade bloodthirst = Upgrade.DORMANT;
         Upgrade ultimate = Upgrade.DORMANT;
         long ultimateReadyAt;
-        long headwebReadyAt;
+        long bloodthirstReadyAt;
         int killStreak;
     }
 
@@ -37,10 +37,12 @@ final class VanguardProgression {
                 PlayerData data = new PlayerData();
                 data.vanguard = yaml.getBoolean(root + "vanguard", false);
                 data.berserker = readUpgrade(root + "abilities.berserker");
-                data.headweb = readUpgrade(root + "abilities.headweb");
+                data.bloodthirst = readUpgrade(root + "abilities.bloodthirst",
+                        root + "abilities.headweb");
                 data.ultimate = readUpgrade(root + "abilities.ultimate");
                 data.ultimateReadyAt = yaml.getLong(root + "cooldowns.ultimate");
-                data.headwebReadyAt = yaml.getLong(root + "cooldowns.headweb");
+                data.bloodthirstReadyAt = yaml.getLong(root + "cooldowns.bloodthirst",
+                        yaml.getLong(root + "cooldowns.headweb"));
                 data.killStreak = Math.max(0, yaml.getInt(root + "kill-streak"));
                 players.put(uuid, data);
             } catch (IllegalArgumentException ignored) { }
@@ -55,16 +57,17 @@ final class VanguardProgression {
         String root = uuid + ".";
         yaml.set(root + "vanguard", data.vanguard);
         yaml.set(root + "abilities.berserker", data.berserker.name());
-        yaml.set(root + "abilities.headweb", data.headweb.name());
+        yaml.set(root + "abilities.bloodthirst", data.bloodthirst.name());
         yaml.set(root + "abilities.ultimate", data.ultimate.name());
         yaml.set(root + "cooldowns.ultimate", data.ultimateReadyAt);
-        yaml.set(root + "cooldowns.headweb", data.headwebReadyAt);
+        yaml.set(root + "cooldowns.bloodthirst", data.bloodthirstReadyAt);
         yaml.set(root + "kill-streak", data.killStreak);
         try { yaml.save(file); } catch (IOException ex) { throw new IllegalStateException("Could not save Vanguard progression", ex); }
     }
     void saveAll() { for (UUID uuid : players.keySet()) save(uuid); }
-    private Upgrade readUpgrade(String path) {
-        try { return Upgrade.valueOf(yaml.getString(path, "DORMANT").toUpperCase()); }
+    private Upgrade readUpgrade(String path, String legacyPath) {
+        try { return Upgrade.valueOf(yaml.getString(path, yaml.getString(legacyPath, "DORMANT")).toUpperCase()); }
         catch (IllegalArgumentException ex) { return Upgrade.DORMANT; }
     }
+    private Upgrade readUpgrade(String path) { return readUpgrade(path, path); }
 }

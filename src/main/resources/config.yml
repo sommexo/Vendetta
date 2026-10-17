@@ -81,6 +81,7 @@ pvp:
   base-reward: 500
   bounty-percent: 0.25
   death-penalty: 2500
+  timeout-seconds: 15
   # A killer cannot earn Marks or inflict the Marks penalty by repeatedly killing the same victim.
   repeat-kill-cooldown-seconds: 600
 vanguard:
@@ -89,26 +90,19 @@ vanguard:
     imperfect-multiplier: 1.25
     perfect-multiplier: 1.50
     perfect-critical-multiplier: 1.75
-  headweb:
-    dormant-window-ms: 1000
-    awakened-window-ms: 2000
-    cooldown-seconds: 12
-    web-duration-ticks: 40
-    web-break-distance-blocks: 2
-    web-slow-amplifier: 2
-    finisher-damage: 4.0
-    weakness-duration-seconds: 3
-    weakness-amplifier: 0
+  bloodthirst:
+    dormant-window-ms: 750
+    imperfect-window-ms: 1000
+    cooldown-seconds: 30
   ultimate:
-    dormant-duration-seconds: 10
     dormant-cooldown-seconds: 240
     awakened-cooldown-seconds: 480
+    ascendant-cooldown-seconds: 2400
     dormant-strength-level: 1
     dormant-speed-level: 1
     awakened-strength-level: 2
     awakened-speed-level: 2
     awakened-fire-resistance: true
-    combat-timeout-seconds: 10
     ally-duration-seconds: 6
     ally-range-blocks: 16
     ally-strength-level: 2
@@ -116,16 +110,15 @@ vanguard:
     ascendant-starting-strength: 2
     ascendant-strength-cap: 4
     ascendant-strength-refresh-seconds: 60
+settings:
+  opCooldownBypass: false
 relics:
-  ascendant-mark-cost: 250
   exploration-drop-chance: 0.002
   exploration-perfect-chance: 0.05
-  cleric:
-    level-2-chance: 0.35
   prices:
-    level-1: 100
-    level-2: 250
-    level-3: 500
+    level-1: 1000
+    level-2: 2000
+    level-3: 2000
 bounties:
   max-items-per-type-per-target: 4096
   # Used only to compare unlike bounty items when choosing the Prime Target.

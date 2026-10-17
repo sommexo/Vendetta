@@ -5,7 +5,7 @@ import org.bukkit.event.EventHandler;
 import org.bukkit.event.Listener;
 import org.bukkit.event.entity.EntityResurrectEvent;
 import org.bukkit.event.player.PlayerInteractEvent;
-import org.bukkit.event.player.PlayerToggleSneakEvent;
+import org.bukkit.inventory.EquipmentSlot;
 
 /** Maps current vanilla inputs to ability service calls; a future mod input adapter can replace this class. */
 final class VanguardActivationHandler implements Listener {
@@ -19,18 +19,13 @@ final class VanguardActivationHandler implements Listener {
         this.abilities = abilities;
     }
 
-    @EventHandler
-    public void onSneak(PlayerToggleSneakEvent event) {
-        if (event.isSneaking()) abilities.beginHeadwebWindow(event.getPlayer());
-    }
-
     @EventHandler(ignoreCancelled = true)
     public void onRightClick(PlayerInteractEvent event) {
-        if (!event.getAction().isRightClick() || event.getPlayer().isSneaking()) return;
+        if (!event.getAction().isRightClick() || event.getHand() != EquipmentSlot.HAND) return;
         Player player = event.getPlayer();
         if (!progression.get(player.getUniqueId()).vanguard) return;
         if (event.getItem() == null || !event.getItem().getType().name().endsWith("_SWORD")) return;
-        abilities.activateUltimate(player, false);
+        abilities.beginBloodthirstWindow(player);
     }
 
     @EventHandler

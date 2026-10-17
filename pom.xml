@@ -6,7 +6,7 @@
 
     <groupId>dev.prc</groupId>
     <artifactId>venmark</artifactId>
-    <version>0.1-pre_alpha</version>
+    <version>vendetta-rc1</version>
     <packaging>jar</packaging>
 
     <name>venmark</name>

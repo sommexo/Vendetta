@@ -1,7 +1,6 @@
 package dev.prc.vendetta;
 
 import org.bukkit.Material;
-import org.bukkit.Location;
 import org.bukkit.entity.Entity;
 import org.bukkit.entity.Player;
 import org.bukkit.entity.Projectile;
@@ -19,8 +18,9 @@ import org.bukkit.entity.LivingEntity;
 import org.bukkit.inventory.ItemStack;
 import org.bukkit.potion.PotionEffect;
 import org.bukkit.potion.PotionEffectType;
-import org.bukkit.entity.TNTPrimed;
-import org.bukkit.scheduler.BukkitTask;
+import org.bukkit.event.player.PlayerJoinEvent;
+import org.bukkit.event.player.PlayerChangedWorldEvent;
+import org.bukkit.event.player.PlayerChangedWorldEvent;
 
 import java.util.HashMap;
 import java.util.HashSet;
@@ -34,8 +34,8 @@ final class VanguardAbilityListener implements Listener {
     private final VanguardProgression progress;
     private final Map<UUID, Long> counterWindows = new HashMap<>();
     private final Map<UUID, Long> combatUntil = new HashMap<>();
+    private final Map<UUID, Set<UUID>> combatOpponents = new HashMap<>();
     private final Set<UUID> activeUltimates = new HashSet<>();
-    private final Set<UUID> counterDamage = new HashSet<>();
     private final Map<UUID, Map<PotionEffectType, PotionEffect>> previousEffects = new HashMap<>();
 
     VanguardAbilityListener(mark plugin, VanguardProgression progress) {
@@ -44,38 +44,56 @@ final class VanguardAbilityListener implements Listener {
         plugin.getServer().getScheduler().runTaskTimer(plugin, this::expireCombatUltimates, 20L, 20L);
     }
 
-    void beginHeadwebWindow(Player player) {
+    void beginBloodthirstWindow(Player player) {
         if (!isVanguard(player) || !isSword(player.getInventory().getItemInMainHand())) return;
         long now = System.currentTimeMillis();
         VanguardProgression.PlayerData data = progress.get(player.getUniqueId());
-        if (data.headwebReadyAt > now) return;
-        counterWindows.put(player.getUniqueId(), now + counterWindowMillis(data.headweb));
+        if (data.bloodthirstReadyAt > now && !plugin.opCooldownBypass(player)) return;
+        if (counterWindows.getOrDefault(player.getUniqueId(), 0L) > now) return;
+        long deadline = now + counterWindowMillis(data.bloodthirst);
+        long oldCooldown = data.bloodthirstReadyAt;
+        data.bloodthirstReadyAt = plugin.opCooldownBypass(player) ? 0L : deadline
+                + plugin.getConfig().getLong("vanguard.bloodthirst.cooldown-seconds", 30) * 1000L;
+        try { progress.save(player.getUniqueId()); }
+        catch (RuntimeException ex) {
+            data.bloodthirstReadyAt = oldCooldown;
+            try { progress.save(player.getUniqueId()); } catch (RuntimeException rollback) { ex.addSuppressed(rollback); }
+            plugin.getLogger().severe("Could not save Bloodthirst cooldown for " + player.getUniqueId() + ": " + ex.getMessage());
+            return;
+        }
+        counterWindows.put(player.getUniqueId(), deadline);
+        player.sendMessage(plugin.message("&bBloodthirst armed"));
+        plugin.getServer().getScheduler().runTaskLater(plugin, () -> {
+            counterWindows.remove(player.getUniqueId(), deadline);
+        }, Math.max(1L, (deadline - now + 49) / 50));
     }
 
     @EventHandler(priority = EventPriority.HIGH, ignoreCancelled = true)
     public void onDamage(EntityDamageEvent event) {
         Player victim = event.getEntity() instanceof Player p ? p : null;
-        if (counterDamage.contains(event.getEntity().getUniqueId())) return;
         LivingEntity source = attacker(event);
         Player attacker = source instanceof Player p ? p : null;
         long now = System.currentTimeMillis();
-        if (victim != null && attacker != null && attacker != victim) {
-            combatUntil.put(attacker.getUniqueId(), now + plugin.getConfig().getLong("vanguard.ultimate.combat-timeout-seconds", 10) * 1000L);
-            combatUntil.put(victim.getUniqueId(), now + plugin.getConfig().getLong("vanguard.ultimate.combat-timeout-seconds", 10) * 1000L);
+        if (source instanceof Player sourcePlayer && eligibleCombatDamage(event)) {
+            long combatDeadline = now + plugin.getConfig().getLong("combat.timeout-seconds", 15) * 1000L;
+            if (victim != null && sourcePlayer != victim) {
+                combatUntil.put(victim.getUniqueId(), combatDeadline);
+                combatUntil.put(sourcePlayer.getUniqueId(), combatDeadline);
+                combatOpponents.computeIfAbsent(victim.getUniqueId(), ignored -> new HashSet<>()).add(sourcePlayer.getUniqueId());
+                combatOpponents.computeIfAbsent(sourcePlayer.getUniqueId(), ignored -> new HashSet<>()).add(victim.getUniqueId());
+            }
         }
 
-        // A defensive counter is only eligible for player-caused damage, never fall/fire/poison/etc.
+        // Bloodthirst can only counter a direct attacker while the Vanguard is crouching with a sword.
         if (victim != null && source != null && source != victim && isVanguard(victim) && victim.isSneaking()
                 && eligibleCombatDamage(event)
                 && isSword(victim.getInventory().getItemInMainHand())
                 && counterWindows.getOrDefault(victim.getUniqueId(), 0L) >= now) {
             counterWindows.remove(victim.getUniqueId());
-            triggerHeadweb(victim, source);
-            event.setCancelled(true);
-            return;
+            triggerBloodthirst(victim);
         }
 
-        if (attacker == null || !isVanguard(attacker)
+        if (attacker == null || !isVanguard(attacker) || !isVanguardWeapon(attacker.getInventory().getItemInMainHand())
                 || activeUltimates.contains(attacker.getUniqueId()) || !eligibleCombatDamage(event)) return;
         applyBerserker(attacker, event);
     }
@@ -99,50 +117,67 @@ final class VanguardAbilityListener implements Listener {
     public void onDeath(PlayerDeathEvent event) {
         Player victim = event.getEntity();
         VanguardProgression.PlayerData dead = progress.get(victim.getUniqueId());
-        if (dead.killStreak != 0) { dead.killStreak = 0; progress.save(victim.getUniqueId()); }
+        if (dead.killStreak != 0) {
+            dead.killStreak = 0;
+            progress.save(victim.getUniqueId());
+            if (!activeUltimates.contains(victim.getUniqueId())) victim.removePotionEffect(PotionEffectType.STRENGTH);
+        }
         if (activeUltimates.contains(victim.getUniqueId())) finishUltimate(victim);
         combatUntil.remove(victim.getUniqueId());
-        counterWindows.remove(victim.getUniqueId());
+        clearOpponentLinks(victim.getUniqueId());
         Player killer = victim.getKiller();
-        if (killer != null && isVanguard(killer) && activeUltimates.contains(killer.getUniqueId())
+        counterWindows.remove(victim.getUniqueId());
+        if (killer != null && isVanguard(killer)
                 && progress.get(killer.getUniqueId()).ultimate == VanguardProgression.Upgrade.ASCENDANT) {
             VanguardProgression.PlayerData data = progress.get(killer.getUniqueId());
             data.killStreak++;
             progress.save(killer.getUniqueId());
             int strengthLevel = Math.min(plugin.getConfig().getInt("vanguard.ultimate.ascendant-strength-cap", 4),
                     plugin.getConfig().getInt("vanguard.ultimate.ascendant-starting-strength", 2) + data.killStreak);
-            killer.addPotionEffect(new PotionEffect(PotionEffectType.STRENGTH,
-                    plugin.getConfig().getInt("vanguard.ultimate.ascendant-strength-refresh-seconds", 60) * 20,
-                    Math.max(0, strengthLevel - 1), false, true, true));
+            applyAscendantStrength(killer, strengthLevel);
         }
+    }
+
+    @EventHandler public void onJoin(PlayerJoinEvent event) { refreshAscendantStreak(event.getPlayer()); }
+
+    @EventHandler public void onWorldChange(PlayerChangedWorldEvent event) {
+        Player player = event.getPlayer();
+        clearOpponentLinks(player.getUniqueId());
+        if (activeUltimates.contains(player.getUniqueId())) finishUltimate(player);
     }
 
     @EventHandler public void onQuit(PlayerQuitEvent event) {
         if (activeUltimates.contains(event.getPlayer().getUniqueId())) finishUltimate(event.getPlayer());
         counterWindows.remove(event.getPlayer().getUniqueId());
-        combatUntil.remove(event.getPlayer().getUniqueId());
+        clearOpponentLinks(event.getPlayer().getUniqueId());
     }
 
     void activateUltimate(Player player, boolean totem) {
         VanguardProgression.PlayerData data = progress.get(player.getUniqueId());
-        if (!data.vanguard || activeUltimates.contains(player.getUniqueId())) return;
+        if (!data.vanguard) return;
+        if (activeUltimates.contains(player.getUniqueId())) {
+            if (totem) finishUltimate(player);
+            return;
+        }
         long now = System.currentTimeMillis();
-        if (data.ultimateReadyAt > now) {
+        boolean bypassCooldown = plugin.opCooldownBypass(player);
+        if (data.ultimateReadyAt > now && !bypassCooldown) {
             plugin.getLogger().fine("Vanguard ultimate cooldown blocked " + player.getUniqueId());
             if (!totem) player.sendMessage(plugin.message("&cUltimate ready in " + ((data.ultimateReadyAt - now + 999) / 1000) + "s."));
             return;
         }
         boolean upgraded = data.ultimate != VanguardProgression.Upgrade.DORMANT;
-        long duration = plugin.getConfig().getLong("vanguard.ultimate.dormant-duration-seconds", 10) * 1000L;
-        long cooldownMinutes = plugin.getConfig().getLong(upgraded ? "vanguard.ultimate.awakened-cooldown-seconds" : "vanguard.ultimate.dormant-cooldown-seconds", upgraded ? 480 : 240);
-        data.ultimateReadyAt = now + cooldownMinutes * 1000L;
+        long cooldownSeconds = data.ultimate == VanguardProgression.Upgrade.ASCENDANT
+                ? plugin.getConfig().getLong("vanguard.ultimate.ascendant-cooldown-seconds", 2400)
+                : plugin.getConfig().getLong(upgraded ? "vanguard.ultimate.awakened-cooldown-seconds" : "vanguard.ultimate.dormant-cooldown-seconds", upgraded ? 480 : 240);
+        data.ultimateReadyAt = bypassCooldown ? 0L : now + cooldownSeconds * 1000L;
         progress.save(player.getUniqueId());
         activeUltimates.add(player.getUniqueId());
         boolean perfect = data.ultimate == VanguardProgression.Upgrade.PERFECT || data.ultimate == VanguardProgression.Upgrade.ASCENDANT;
         int strength = Math.max(1, plugin.getConfig().getInt(upgraded ? "vanguard.ultimate.awakened-strength-level" : "vanguard.ultimate.dormant-strength-level", upgraded ? 2 : 1));
         if (data.ultimate == VanguardProgression.Upgrade.ASCENDANT) strength = Math.min(plugin.getConfig().getInt("vanguard.ultimate.ascendant-strength-cap", 4), plugin.getConfig().getInt("vanguard.ultimate.ascendant-starting-strength", 2) + data.killStreak);
         int speed = Math.max(1, plugin.getConfig().getInt(upgraded ? "vanguard.ultimate.awakened-speed-level" : "vanguard.ultimate.dormant-speed-level", upgraded ? 2 : 1));
-        int ticks = perfect ? 40 : (int) Math.min(Integer.MAX_VALUE, Math.max(1, duration / 50));
+        int ticks = 40;
         Map<PotionEffectType, PotionEffect> previous = new HashMap<>();
         for (PotionEffectType type : new PotionEffectType[]{PotionEffectType.STRENGTH, PotionEffectType.SPEED, PotionEffectType.FIRE_RESISTANCE}) {
             PotionEffect existing = player.getPotionEffect(type);
@@ -165,10 +200,9 @@ final class VanguardAbilityListener implements Listener {
                 ally.addPotionEffect(new PotionEffect(PotionEffectType.SPEED, allyTicks, allySpeed - 1, false, true, true));
             }
         }
-        combatUntil.put(player.getUniqueId(), now + plugin.getConfig().getLong("vanguard.ultimate.combat-timeout-seconds", 10) * 1000L);
-        if (!perfect) plugin.getServer().getScheduler().runTaskLater(plugin, () -> finishUltimate(player), ticks);
+        combatUntil.put(player.getUniqueId(), now + plugin.getConfig().getLong("combat.timeout-seconds", 15) * 1000L);
         player.sendMessage(plugin.message("&c&lBLOOD BLOOD BLOOD &7activated."));
-        plugin.getLogger().fine("Vanguard ultimate activated for " + player.getUniqueId() + (totem ? " via totem" : " manually"));
+        plugin.getLogger().fine("Vanguard ultimate activated for " + player.getUniqueId() + " via totem");
     }
 
     private void applyBerserker(Player attacker, EntityDamageEvent event) {
@@ -187,55 +221,34 @@ final class VanguardAbilityListener implements Listener {
         event.setDamage(event.getDamage() * Math.max(0, multiplier));
     }
 
-    private void triggerHeadweb(Player defender, LivingEntity attacker) {
+    private void triggerBloodthirst(Player defender) {
         VanguardProgression.PlayerData data = progress.get(defender.getUniqueId());
-        data.headwebReadyAt = System.currentTimeMillis() + plugin.getConfig().getLong("vanguard.headweb.cooldown-seconds", 12) * 1000L;
+        data.bloodthirstReadyAt = plugin.opCooldownBypass(defender) ? 0L
+                : System.currentTimeMillis() + plugin.getConfig().getLong("vanguard.bloodthirst.cooldown-seconds", 30) * 1000L;
         progress.save(defender.getUniqueId());
-        int weaknessTicks = data.headweb == VanguardProgression.Upgrade.PERFECT ? plugin.getConfig().getInt("vanguard.headweb.weakness-duration-seconds", 3) * 20 : 0;
-        if (weaknessTicks > 0) attacker.addPotionEffect(new PotionEffect(PotionEffectType.WEAKNESS, weaknessTicks, plugin.getConfig().getInt("vanguard.headweb.weakness-amplifier", 0), false, true, true));
-        int webTicks = plugin.getConfig().getInt("vanguard.headweb.web-duration-ticks", 40);
-        attacker.addPotionEffect(new PotionEffect(PotionEffectType.SLOWNESS, webTicks, plugin.getConfig().getInt("vanguard.headweb.web-slow-amplifier", 2), false, true, true));
-        defender.sendMessage(plugin.message("&bHeadweb counter triggered!"));
-        plugin.getLogger().fine("Headweb triggered by " + defender.getUniqueId() + " on " + attacker.getUniqueId());
-        attacker.sendMessage(plugin.message("&cHeadwebbed!"));
-        Location trappedAt = attacker.getLocation().clone();
-        int breakDistance = plugin.getConfig().getInt("vanguard.headweb.web-break-distance-blocks", 2);
-        BukkitTask[] task = new BukkitTask[1];
-        task[0] = plugin.getServer().getScheduler().runTaskTimer(plugin, new Runnable() {
-            int elapsed;
-            @Override public void run() {
-                if (!attacker.isValid() || attacker.isDead()) { task[0].cancel(); return; }
-                elapsed += 5;
-                boolean escaped = !attacker.getWorld().equals(trappedAt.getWorld())
-                        || attacker.getLocation().distanceSquared(trappedAt) > (double) breakDistance * breakDistance
-                        || !attacker.hasPotionEffect(PotionEffectType.SLOWNESS);
-                if (!escaped && elapsed < Math.max(5, webTicks)) return;
-                task[0].cancel();
-                TNTPrimed visual = attacker.getWorld().spawn(attacker.getLocation(), TNTPrimed.class);
-                visual.setFuseTicks(1);
-                visual.setYield(0);
-                visual.setIsIncendiary(false);
-                double damage = plugin.getConfig().getDouble("vanguard.headweb.finisher-damage", 4.0);
-                counterDamage.add(attacker.getUniqueId());
-                try { attacker.damage(Math.max(0, damage), defender); }
-                finally { counterDamage.remove(attacker.getUniqueId()); }
+        plugin.getServer().getScheduler().runTask(plugin, () -> {
+            if (defender.isOnline() && !defender.isDead()) {
+            double maximum = defender.getAttribute(org.bukkit.attribute.Attribute.MAX_HEALTH).getValue();
+                defender.setHealth(maximum);
             }
-        }, 5L, 5L);
+        });
+        defender.sendMessage(plugin.message("&bBloodthirst counter! You recovered health."));
+        plugin.getLogger().fine("Bloodthirst triggered by " + defender.getUniqueId());
     }
 
     private void expireCombatUltimates() {
         long now = System.currentTimeMillis();
+        for (Player player : plugin.getServer().getOnlinePlayers()) refreshAscendantStreak(player);
+        for (UUID id : Set.copyOf(combatUntil.keySet()))
+            if (combatUntil.getOrDefault(id, 0L) <= now) clearOpponentLinks(id);
         for (UUID id : Set.copyOf(activeUltimates)) {
-            VanguardProgression.PlayerData data = progress.get(id);
-            if (data.ultimate == VanguardProgression.Upgrade.PERFECT || data.ultimate == VanguardProgression.Upgrade.ASCENDANT) {
-                if (combatUntil.getOrDefault(id, 0L) <= now) {
-                    Player player = plugin.getServer().getPlayer(id);
-                    if (player != null) finishUltimate(player);
-                    else activeUltimates.remove(id);
-                } else {
-                    Player player = plugin.getServer().getPlayer(id);
-                    if (player != null) refreshPerfectUltimate(player);
-                }
+            if (combatUntil.getOrDefault(id, 0L) <= now) {
+                Player player = plugin.getServer().getPlayer(id);
+                if (player != null) finishUltimate(player);
+                else activeUltimates.remove(id);
+            } else {
+                Player player = plugin.getServer().getPlayer(id);
+                if (player != null) refreshUltimate(player);
             }
         }
     }
@@ -251,6 +264,24 @@ final class VanguardAbilityListener implements Listener {
             if (effect.getDuration() > 0) player.addPotionEffect(effect);
         });
         player.sendMessage(plugin.message("&7Your Vanguard ultimate ended."));
+        refreshAscendantStreak(player);
+    }
+
+    private void clearOpponentLinks(UUID playerId) {
+        combatUntil.remove(playerId);
+        Set<UUID> opponents = combatOpponents.remove(playerId);
+        if (opponents == null) return;
+        for (UUID opponentId : opponents) {
+            Set<UUID> remaining = combatOpponents.get(opponentId);
+            if (remaining == null) continue;
+            remaining.remove(playerId);
+            if (remaining.isEmpty()) {
+                combatOpponents.remove(opponentId);
+                combatUntil.remove(opponentId);
+                Player opponent = plugin.getServer().getPlayer(opponentId);
+                if (opponent != null && activeUltimates.contains(opponentId)) finishUltimate(opponent);
+            }
+        }
     }
 
     void shutdown() {
@@ -261,16 +292,31 @@ final class VanguardAbilityListener implements Listener {
         }
     }
 
-    private void refreshPerfectUltimate(Player player) {
+    private void refreshUltimate(Player player) {
         VanguardProgression.PlayerData data = progress.get(player.getUniqueId());
-        int strength = data.ultimate == VanguardProgression.Upgrade.ASCENDANT
+        boolean dormant = data.ultimate == VanguardProgression.Upgrade.DORMANT;
+        int strength = dormant ? plugin.getConfig().getInt("vanguard.ultimate.dormant-strength-level", 1)
+                : data.ultimate == VanguardProgression.Upgrade.ASCENDANT
                 ? Math.min(plugin.getConfig().getInt("vanguard.ultimate.ascendant-strength-cap", 4), plugin.getConfig().getInt("vanguard.ultimate.ascendant-starting-strength", 2) + data.killStreak)
                 : plugin.getConfig().getInt("vanguard.ultimate.awakened-strength-level", 2);
-        int speed = plugin.getConfig().getInt("vanguard.ultimate.awakened-speed-level", 2);
+        int speed = plugin.getConfig().getInt(dormant ? "vanguard.ultimate.dormant-speed-level" : "vanguard.ultimate.awakened-speed-level", dormant ? 1 : 2);
         player.addPotionEffect(new PotionEffect(PotionEffectType.STRENGTH, 40, Math.max(0, strength - 1), false, true, true));
         player.addPotionEffect(new PotionEffect(PotionEffectType.SPEED, 40, Math.max(0, speed - 1), false, true, true));
-        if (plugin.getConfig().getBoolean("vanguard.ultimate.awakened-fire-resistance", true))
+        if (!dormant && plugin.getConfig().getBoolean("vanguard.ultimate.awakened-fire-resistance", true))
             player.addPotionEffect(new PotionEffect(PotionEffectType.FIRE_RESISTANCE, 40, 0, false, true, true));
+    }
+
+    private void refreshAscendantStreak(Player player) {
+        VanguardProgression.PlayerData data = progress.get(player.getUniqueId());
+        if (!data.vanguard || data.ultimate != VanguardProgression.Upgrade.ASCENDANT || data.killStreak <= 0) return;
+        int strength = Math.min(plugin.getConfig().getInt("vanguard.ultimate.ascendant-strength-cap", 4),
+                plugin.getConfig().getInt("vanguard.ultimate.ascendant-starting-strength", 2) + data.killStreak);
+        applyAscendantStrength(player, strength);
+    }
+
+    private void applyAscendantStrength(Player player, int level) {
+        int ticks = Math.max(40, plugin.getConfig().getInt("vanguard.ultimate.ascendant-strength-refresh-seconds", 60) * 20);
+        player.addPotionEffect(new PotionEffect(PotionEffectType.STRENGTH, ticks, Math.max(0, level - 1), false, true, true), true);
     }
 
     private boolean eligibleCombatDamage(EntityDamageEvent event) {
@@ -287,7 +333,12 @@ final class VanguardAbilityListener implements Listener {
     }
     private boolean isVanguard(Player player) { return progress.get(player.getUniqueId()).vanguard; }
     private boolean isSword(ItemStack item) { return item != null && item.getType().name().endsWith("_SWORD"); }
+    private boolean isVanguardWeapon(ItemStack item) {
+        return item != null && (item.getType().name().endsWith("_SWORD") || item.getType().name().endsWith("_AXE"));
+    }
     private long counterWindowMillis(VanguardProgression.Upgrade upgrade) {
-        return plugin.getConfig().getLong(upgrade == VanguardProgression.Upgrade.DORMANT ? "vanguard.headweb.dormant-window-ms" : "vanguard.headweb.awakened-window-ms", upgrade == VanguardProgression.Upgrade.DORMANT ? 1000 : 2000);
+        return plugin.getConfig().getLong(upgrade == VanguardProgression.Upgrade.DORMANT
+                ? "vanguard.bloodthirst.dormant-window-ms" : "vanguard.bloodthirst.imperfect-window-ms",
+                upgrade == VanguardProgression.Upgrade.DORMANT ? 750 : 1000);
     }
 }

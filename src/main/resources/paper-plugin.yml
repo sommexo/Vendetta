@@ -9,26 +9,4 @@ loader: dev.prc.vendetta.markLoader
 api-version: '26.3'
 load: STARTUP
 
-commands:
-  marks:
-    description: View and manage Marks balances
-    usage: /marks [top|check|give|take|inspect|reload]
-    permission: venmark.use
-  mark:
-    description: View or post player bounties
-    usage: /mark bounties | /mark bounty <player> <diamonds|stars> <amount>
-    permission: venmark.use
-  vanguard:
-    description: Choose Vanguard and inspect your abilities
-    usage: /vanguard <choose|status>
-    permission: venmark.use
-
-permissions:
-  venmark.use:
-    description: View your Marks balance
-    default: true
-  venmark.admin:
-    description: Reload VenMark configuration and inspect online balances
-    default: op
-
 authors: [ Sommexo_ ]

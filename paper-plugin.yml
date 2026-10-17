@@ -1,0 +1,12 @@
+name: VenMark
+description: Vendetta SMP Marks economy
+prefix: Vendetta
+version: 'vendetta-rc1'
+
+main: dev.prc.vendetta.mark
+bootstrapper: dev.prc.vendetta.markBootstrap
+loader: dev.prc.vendetta.markLoader
+api-version: '26.3'
+load: STARTUP
+
+authors: [ Sommexo_ ]
