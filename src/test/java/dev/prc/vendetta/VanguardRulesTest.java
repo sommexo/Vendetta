@@ -1,0 +1,20 @@
+package dev.prc.vendetta;
+
+import org.junit.jupiter.api.Test;
+import static org.junit.jupiter.api.Assertions.assertEquals;
+
+class VanguardRulesTest {
+    @Test void berserkerUsesAbsoluteHeartThresholdsAndReplacementMultipliers() {
+        assertEquals(1.0, VanguardRules.berserkerMultiplier(VanguardProgression.Upgrade.DORMANT, 20.0));
+        assertEquals(1.10, VanguardRules.berserkerMultiplier(VanguardProgression.Upgrade.DORMANT, 19.99));
+        assertEquals(1.25, VanguardRules.berserkerMultiplier(VanguardProgression.Upgrade.IMPERFECT, 9.0));
+        assertEquals(1.50, VanguardRules.berserkerMultiplier(VanguardProgression.Upgrade.PERFECT, 10.0));
+        assertEquals(1.75, VanguardRules.berserkerMultiplier(VanguardProgression.Upgrade.PERFECT, 9.99));
+    }
+
+    @Test void bloodthirstHasOnlySpecifiedWindowValues() {
+        assertEquals(750L, VanguardRules.bloodthirstWindowMillis(VanguardProgression.Upgrade.DORMANT));
+        assertEquals(1_000L, VanguardRules.bloodthirstWindowMillis(VanguardProgression.Upgrade.IMPERFECT));
+        assertEquals(750L, VanguardRules.bloodthirstWindowMillis(VanguardProgression.Upgrade.PERFECT));
+    }
+}
