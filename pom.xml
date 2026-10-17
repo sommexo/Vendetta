@@ -6,7 +6,7 @@
 
     <groupId>dev.prc</groupId>
     <artifactId>venmark</artifactId>
-    <version>vendetta-rc1</version>
+    <version>v1-beta-build-4</version>
     <packaging>jar</packaging>
 
     <name>venmark</name>
@@ -14,9 +14,11 @@
     <properties>
         <java.version>25</java.version>
         <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
+        <release.name>v1-beta build 4</release.name>
     </properties>
 
     <build>
+        <finalName>venmark-v1-beta-build-4</finalName>
         <defaultGoal>clean package</defaultGoal>
         <plugins>
             <plugin>
@@ -58,6 +60,12 @@
     </repositories>
 
     <dependencies>
+        <dependency>
+            <groupId>org.junit.jupiter</groupId>
+            <artifactId>junit-jupiter</artifactId>
+            <version>5.11.4</version>
+            <scope>test</scope>
+        </dependency>
         <dependency>
             <groupId>io.papermc.paper</groupId>
             <artifactId>paper-api</artifactId>

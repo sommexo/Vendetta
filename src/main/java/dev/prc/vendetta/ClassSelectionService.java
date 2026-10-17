@@ -53,6 +53,11 @@ final class ClassSelectionService implements Listener {
         vanguard.get(uuid).vanguard = selected == PlayerClass.VANGUARD;
         save();
         vanguard.save(uuid);
+        Player player = plugin.getServer().getPlayer(uuid);
+        if (player != null) plugin.getServer().getScheduler().runTask(plugin, () -> {
+            plugin.enforceClassInventory(player);
+            plugin.classChanged(player);
+        });
         return true;
     }
 

@@ -1,7 +1,7 @@
 name: VenMark
 description: Vendetta SMP Marks economy
 prefix: Vendetta
-version: '${version}'
+version: '${release.name}'
 
 main: dev.prc.vendetta.mark
 bootstrapper: dev.prc.vendetta.markBootstrap

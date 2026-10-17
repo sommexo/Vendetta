@@ -1,4 +1,4 @@
-# VenMark
+# VenMark — v1-beta build 4
 
 VenMark is a Paper plugin for Vendetta SMP. The project targets the Paper 26.3 command API and Java 25. Paper commands are registered in code through `JavaPlugin.registerCommand`; `paper-plugin.yml` intentionally has no YAML command declarations. The Maven dependency currently resolves the Paper 26.3 pre-release API configured by `pom.xml`.
 
@@ -16,9 +16,10 @@ VenMark is a Paper plugin for Vendetta SMP. The project targets the Paper 26.3 c
 | `/mark bounties` | View tracked bounties and Prime Target. |
 | `/mark ally <player>` and `/mark unally <player>` | Manage Vanguard allies. |
 | `/vanguard status` | View Vanguard progression. |
-| `/venmark berserker` | View Berserker description and current tier. |
-| `/venmark bloodthirst` | View Bloodthirst description and current tier. |
-| `/venmark ultimate`, `/venmark bloodbloodblood`, or `/venmark blood-blood-blood` | View BLOOD BLOOD BLOOD description and current tier. |
+| `/venmark ability berserker` | View Berserker description and current tier. |
+| `/venmark ability bloodthirst` | View Bloodthirst description and current tier. |
+| `/venmark ability blood-blood-blood` | View BLOOD BLOOD BLOOD description and current tier. |
+| `/venmark ability <ability>` | View the selected class ability, its description and current tier. Supports Predator's Instinct, Marked Prey, Into the Void, Afterimage, Unshaken, Sculk Pulse, Ancient Guardian, Unyielding, Berserker, Bloodthirst, BLOOD BLOOD BLOOD, and Grim Reaper. |
 
 Physical currency is identified by VenMark PDC metadata. Purple dye is worth 10 Marks and a Nether Star is worth 1,000 Marks. Bank balances are capped at 20,000; kill rewards above the cap are stored as pending Marks. Currency items with no valid VenMark metadata have no currency value.
 
@@ -74,9 +75,9 @@ Relic grants use the existing relic factory and server-side metadata. The recipi
 
 ## Class and relic notes
 
-New players receive a locked class selection GUI. Existing Vanguard progression is migrated as a Vanguard class selection. Imperfect relics cost one genuine 1,000-Mark Nether Star and open the regular Vanguard ability selection. Perfect upgrades the ultimate for two genuine Nether Stars. Ascendant upgrades an already-Perfect ultimate for two genuine Nether Stars plus the class-specific Netherite item. Designated naturally spawned clerics display all three tiers; Master clerics therefore guarantee an Ascendant offer. Purchases validate progression, payment and delivery space before committing. Phantom and Warden ability implementations are not present yet, so their combat mechanics and relic purchases remain unavailable.
+New players receive a class selection GUI. Existing Vanguard progression is migrated as a Vanguard class selection. Imperfect relics cost one genuine 1,000-Mark Nether Star and open the regular ability selection. Perfect upgrades the class ultimate for two genuine Nether Stars. Ascendant upgrades an already-Perfect ultimate for two genuine Nether Stars plus the class-specific Netherite item. Designated naturally spawned clerics display all three tiers; Master clerics therefore guarantee an Ascendant offer. Relics use unique PDC identifiers, tier identifiers, a format version, and a persisted one-use identity ledger. Their visual glint is not used for authentication. Purchases validate progression, payment and delivery space before committing.
 
-Combat state currently exists only in memory and does not yet resolve an offline combat death after a restart or reconnect. Warden team attribution and Unyielding reward overflow handling also remain incomplete pending design details.
+Combat state expires after 15 seconds without qualifying PvP damage. Direct and supported indirect player damage refreshes that timer. Combat logging is recorded across disconnects and restarts and resolved on rejoin. Warden capture state is in memory and is released on shutdown, restart, logout, world change, cancellation, or ultimate end, so it cannot persist indefinitely.
 
 Genuine Vanguard Imperfect and Perfect relics open a three-choice ability menu. Ascendant relics skip that menu and apply only to the ultimate after its Perfect upgrade.
 
@@ -87,3 +88,5 @@ mvn clean package
 ```
 
 The plugin JAR is created under `target/`.
+
+Release name: `v1-beta build 4`. The Maven version uses `v1-beta-build-4` so the coordinates and artifact filename remain valid.

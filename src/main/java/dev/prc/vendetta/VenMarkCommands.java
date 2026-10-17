@@ -34,15 +34,32 @@ final class VenMarkCommands implements BasicCommand {
             case "choose" -> choose(sender, args);
             case "deposit", "withdraw" -> bankTransaction(sender, args, root);
             case "currency", "relic", "class", "marks", "abuse" -> admin(sender, args, root);
-            case "berserker" -> abilityDescription(sender, args, "berserker");
-            case "bloodthirst" -> abilityDescription(sender, args, "bloodthirst");
-            case "blood" -> {
-                if (args.length == 3 && args[1].equalsIgnoreCase("blood") && args[2].equalsIgnoreCase("blood"))
-                    abilityDescription(sender, new String[]{"ultimate"}, "ultimate");
-                else abilityDescription(sender, args, "ultimate");
-            }
-            case "ultimate", "bloodbloodblood", "blood-blood-blood", "blood_blood_blood" -> abilityDescription(sender, args, "ultimate");
+            case "ability" -> ability(sender, args);
             default -> { sender.sendMessage(plugin.message("&cUnknown command. Use /venmark for help.")); }
+        }
+    }
+
+    private void ability(CommandSender sender, String[] args) {
+        if (args.length != 2) {
+            sender.sendMessage(plugin.message("&eUsage: /venmark ability <berserker|bloodthirst|blood-blood-blood|grim-reaper|predators-instinct|marked-prey|into-the-void|afterimage|unshaken|sculk-pulse|ancient-guardian|unyielding>"));
+            return;
+        }
+        switch (args[1].toLowerCase(Locale.ROOT)) {
+            case "berserker" -> abilityDescription(sender, new String[]{"ability"}, "berserker");
+            case "bloodthirst" -> abilityDescription(sender, new String[]{"ability"}, "bloodthirst");
+            case "blood-blood-blood", "bloodbloodblood", "blood_blood_blood" ->
+                    abilityDescription(sender, new String[]{"ability"}, "ultimate");
+            case "grim-reaper", "grimreaper", "grim_reaper" -> abilityDescription(sender, new String[]{"ability"}, "grim-reaper");
+            case "predators-instinct", "predators_instinct" -> abilityDescription(sender, new String[]{"ability"}, "predators-instinct");
+            case "marked-prey", "marked_prey" -> abilityDescription(sender, new String[]{"ability"}, "marked-prey");
+            case "into-the-void", "intothevoid", "into_the_void" ->
+                    abilityDescription(sender, new String[]{"ability"}, "into-the-void");
+            case "afterimage" -> abilityDescription(sender, new String[]{"ability"}, "afterimage");
+            case "unshaken" -> abilityDescription(sender, new String[]{"ability"}, "unshaken");
+            case "sculk-pulse", "sculk_pulse" -> abilityDescription(sender, new String[]{"ability"}, "sculk-pulse");
+            case "ancient-guardian", "ancient_guardian" -> abilityDescription(sender, new String[]{"ability"}, "ancient-guardian");
+            case "unyielding" -> abilityDescription(sender, new String[]{"ability"}, "unyielding");
+            default -> sender.sendMessage(plugin.message("&cUnknown ability. Use /venmark ability for the ability list."));
         }
     }
 
@@ -79,7 +96,11 @@ final class VenMarkCommands implements BasicCommand {
     }
 
     private void abilityDescription(CommandSender sender, String[] args, String ability) {
-        if (args.length != 1) { sender.sendMessage(plugin.message("&eUsage: /venmark " + (ability.equals("ultimate") ? "ultimate" : ability))); return; }
+        if (args.length != 1) {
+            String usage = "/venmark ability " + (ability.equals("ultimate") ? "blood-blood-blood" : ability);
+            sender.sendMessage(plugin.message("&eUsage: " + usage));
+            return;
+        }
         String title;
         String description;
         switch (ability) {
@@ -99,6 +120,42 @@ final class VenMarkCommands implements BasicCommand {
                         + "s. The hit still deals damage; a successful counter heals to full. A missed window starts a full cooldown of "
                         + plugin.getConfig().getLong("vanguard.bloodthirst.cooldown-seconds", 30) + "s.";
             }
+            case "into-the-void" -> {
+                title = "Into the Void â€” Ultimate";
+                description = "Left-click with an Ender Pearl for Invisibility and Speed I. Attacking breaks invisibility; it returns after 3 seconds while combat continues. Perfect grants Speed II; Ascendant grants a one-hit bonus and Speed IV after 30 seconds without landing a hit. Cooldown: 5 minutes.";
+            }
+            case "predators-instinct" -> {
+                title = "Predator's Instinct — Counter";
+                description = "Right-click with a sword to arm for 1 second, then crouch as an attack lands. The counter nullifies that hit, blinds and stuns the attacker for 5 seconds, and has a 20-second cooldown. Ascendant Into the Void grants Afterimage: Speed III for 12 seconds after a successful counter.";
+            }
+            case "marked-prey" -> {
+                title = "Marked Prey — Passive";
+                description = "Attackers who hit Phantom receive Glowing for 6 seconds Dormant, 9 seconds Imperfect, and 15 seconds Perfect. It provides no directional tracking.";
+            }
+            case "grim-reaper" -> {
+                title = "Grim Reaper — Passive";
+                description = "Qualifying player kills build Strength up to Strength IV. Strength progression persists after BLOOD BLOOD BLOOD ends and resets on death.";
+            }
+            case "afterimage" -> {
+                title = "Afterimage — Ascendant Bonus";
+                description = "A successful Predator's Instinct counter grants Speed III for 12 seconds while Into the Void is Ascendant.";
+            }
+            case "unshaken" -> {
+                title = "Unshaken — Passive";
+                description = "Warden knockback resistance is 20% Dormant, 30% Imperfect, and 40% Perfect.";
+            }
+            case "sculk-pulse" -> {
+                title = "Sculk Pulse — Active";
+                description = "Right-click a sword to reveal enemy players within 20 blocks for 3 seconds. Cooldown: 20 seconds.";
+            }
+            case "ancient-guardian" -> {
+                title = "Ancient Guardian — Ultimate";
+                description = "Left-click with a shield to capture enemies in a 30-, 40-, or 50-block radius. It grants Warden/allies Resistance II and enemies Weakness I. Cooldown: 15 minutes.";
+            }
+            case "unyielding" -> {
+                title = "Unyielding — Ascendant Bonus";
+                description = "At half health during Ascendant Ancient Guardian, Warden takes 60% less damage and becomes immobile for the rest of the ultimate.";
+            }
             default -> {
                 title = "BLOOD BLOOD BLOOD — Ultimate";
                 long dormantCooldown = plugin.getConfig().getLong("vanguard.ultimate.dormant-cooldown-seconds", 240);
@@ -111,7 +168,8 @@ final class VenMarkCommands implements BasicCommand {
         }
         sender.sendMessage(plugin.message("&6" + title));
         sender.sendMessage(plugin.message("&7" + description));
-        if (sender instanceof Player player && "vanguard".equals(plugin.selectedClass(player.getUniqueId()))) {
+        if (sender instanceof Player player && "vanguard".equals(plugin.selectedClass(player.getUniqueId()))
+                && List.of("berserker", "bloodthirst", "ultimate").contains(ability)) {
             VanguardProgression.PlayerData data = progression.get(player.getUniqueId());
             VanguardProgression.Upgrade tier = switch (ability) {
                 case "berserker" -> data.berserker;
@@ -246,14 +304,14 @@ final class VenMarkCommands implements BasicCommand {
     private String tierName(int tier) { return switch (tier) { case 1 -> "Imperfect"; case 2 -> "Perfect"; default -> "Ascendant"; }; }
     private void help(CommandSender sender) {
         sender.sendMessage(plugin.message("&6VenMark: /venmark choose <class> | /venmark deposit <amount> | /venmark withdraw <amount>"));
-        sender.sendMessage(plugin.message("&7Abilities: /venmark berserker | /venmark bloodthirst | /venmark ultimate"));
+        sender.sendMessage(plugin.message("&7Abilities: /venmark ability <ability-name> (berserker, bloodthirst, grim-reaper, predator's-instinct, marked-prey, into-the-void, afterimage, unshaken, sculk-pulse, ancient-guardian, unyielding)"));
         sender.sendMessage(plugin.message("&7Economy: /deposit <amount|hand|offhand> | /withdraw <amount> | /bounty <player>"));
         sender.sendMessage(plugin.message("&7Admin: /venmark marks give|reset, currency give, relic give, class set, marks abuse"));
     }
 
     @Override public Collection<String> suggest(CommandSourceStack source, String[] args) {
-        if (args.length == 1) return List.of("choose", "deposit", "withdraw", "berserker", "bloodthirst", "ultimate", "bloodbloodblood", "blood-blood-blood", "marks", "currency", "relic", "class");
-        if (args.length == 2 && args[0].equalsIgnoreCase("blood")) return List.of("blood");
+        if (args.length == 1) return List.of("choose", "deposit", "withdraw", "ability", "marks", "currency", "relic", "class");
+        if (args.length == 2 && args[0].equalsIgnoreCase("ability")) return List.of("berserker", "bloodthirst", "blood-blood-blood", "grim-reaper", "predators-instinct", "marked-prey", "into-the-void", "afterimage", "unshaken", "sculk-pulse", "ancient-guardian", "unyielding");
         if (args.length == 2 && (args[0].equalsIgnoreCase("deposit") || args[0].equalsIgnoreCase("withdraw"))) return List.of("10", "100", "1000");
         if (args.length == 2 && args[0].equalsIgnoreCase("choose")) return List.of("vanguard", "phantom", "warden");
         if (args.length == 2 && List.of("marks", "currency", "relic", "class").contains(args[0].toLowerCase(Locale.ROOT)))

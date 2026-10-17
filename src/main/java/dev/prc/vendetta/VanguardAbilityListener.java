@@ -35,6 +35,8 @@ final class VanguardAbilityListener implements Listener {
     private final Map<UUID, Long> counterWindows = new HashMap<>();
     private final Map<UUID, Long> combatUntil = new HashMap<>();
     private final Map<UUID, Set<UUID>> combatOpponents = new HashMap<>();
+    private final Map<UUID, UUID> recentPlayerAttacker = new HashMap<>();
+    private final Map<UUID, Long> recentPlayerAttackAt = new HashMap<>();
     private final Set<UUID> activeUltimates = new HashSet<>();
     private final Map<UUID, Map<PotionEffectType, PotionEffect>> previousEffects = new HashMap<>();
 
@@ -74,6 +76,10 @@ final class VanguardAbilityListener implements Listener {
         LivingEntity source = attacker(event);
         Player attacker = source instanceof Player p ? p : null;
         long now = System.currentTimeMillis();
+        if (victim != null && event instanceof EntityDamageByEntityEvent && attacker != null && attacker != victim) {
+            recentPlayerAttacker.put(victim.getUniqueId(), attacker.getUniqueId());
+            recentPlayerAttackAt.put(victim.getUniqueId(), now);
+        }
         if (source instanceof Player sourcePlayer && eligibleCombatDamage(event)) {
             long combatDeadline = now + plugin.getConfig().getLong("combat.timeout-seconds", 15) * 1000L;
             if (victim != null && sourcePlayer != victim) {
@@ -86,14 +92,14 @@ final class VanguardAbilityListener implements Listener {
 
         // Bloodthirst can only counter a direct attacker while the Vanguard is crouching with a sword.
         if (victim != null && source != null && source != victim && isVanguard(victim) && victim.isSneaking()
-                && eligibleCombatDamage(event)
+                && event instanceof EntityDamageByEntityEvent && eligibleCombatDamage(event)
                 && isSword(victim.getInventory().getItemInMainHand())
                 && counterWindows.getOrDefault(victim.getUniqueId(), 0L) >= now) {
             counterWindows.remove(victim.getUniqueId());
             triggerBloodthirst(victim);
         }
 
-        if (attacker == null || !isVanguard(attacker) || !isVanguardWeapon(attacker.getInventory().getItemInMainHand())
+        if (!(event instanceof EntityDamageByEntityEvent) || attacker == null || !isVanguard(attacker) || !isVanguardWeapon(attacker.getInventory().getItemInMainHand())
                 || activeUltimates.contains(attacker.getUniqueId()) || !eligibleCombatDamage(event)) return;
         applyBerserker(attacker, event);
     }
@@ -142,6 +148,8 @@ final class VanguardAbilityListener implements Listener {
 
     @EventHandler public void onWorldChange(PlayerChangedWorldEvent event) {
         Player player = event.getPlayer();
+        recentPlayerAttacker.remove(player.getUniqueId());
+        recentPlayerAttackAt.remove(player.getUniqueId());
         clearOpponentLinks(player.getUniqueId());
         if (activeUltimates.contains(player.getUniqueId())) finishUltimate(player);
     }
@@ -207,18 +215,8 @@ final class VanguardAbilityListener implements Listener {
 
     private void applyBerserker(Player attacker, EntityDamageEvent event) {
         VanguardProgression.Upgrade stage = progress.get(attacker.getUniqueId()).berserker;
-        double max = attacker.getAttribute(org.bukkit.attribute.Attribute.MAX_HEALTH).getValue();
-        double health = attacker.getHealth();
-        if (health >= max * 0.5) return;
-        double multiplier;
-        if (stage == VanguardProgression.Upgrade.PERFECT && health < max * 0.25)
-            multiplier = plugin.getConfig().getDouble("vanguard.berserker.perfect-critical-multiplier", 1.75);
-        else if (stage == VanguardProgression.Upgrade.PERFECT)
-            multiplier = plugin.getConfig().getDouble("vanguard.berserker.perfect-multiplier", 1.50);
-        else if (stage == VanguardProgression.Upgrade.IMPERFECT)
-            multiplier = plugin.getConfig().getDouble("vanguard.berserker.imperfect-multiplier", 1.25);
-        else multiplier = plugin.getConfig().getDouble("vanguard.berserker.dormant-multiplier", 1.10);
-        event.setDamage(event.getDamage() * Math.max(0, multiplier));
+        double multiplier = VanguardRules.berserkerMultiplier(stage, attacker.getHealth());
+        if (multiplier != 1.0) event.setDamage(event.getDamage() * multiplier);
     }
 
     private void triggerBloodthirst(Player defender) {
@@ -292,6 +290,12 @@ final class VanguardAbilityListener implements Listener {
         }
     }
 
+    void classChanged(Player player) {
+        UUID id = player.getUniqueId();
+        counterWindows.remove(id);
+        if (activeUltimates.contains(id)) finishUltimate(player);
+    }
+
     private void refreshUltimate(Player player) {
         VanguardProgression.PlayerData data = progress.get(player.getUniqueId());
         boolean dormant = data.ultimate == VanguardProgression.Upgrade.DORMANT;
@@ -321,14 +325,28 @@ final class VanguardAbilityListener implements Listener {
 
     private boolean eligibleCombatDamage(EntityDamageEvent event) {
         DamageCause cause = event.getCause();
-        return cause == DamageCause.ENTITY_ATTACK || cause == DamageCause.ENTITY_SWEEP_ATTACK || cause == DamageCause.PROJECTILE;
+        return cause == DamageCause.ENTITY_ATTACK || cause == DamageCause.ENTITY_SWEEP_ATTACK || cause == DamageCause.PROJECTILE
+                || cause == DamageCause.POISON || cause == DamageCause.WITHER || cause == DamageCause.MAGIC
+                || cause == DamageCause.DRAGON_BREATH || cause == DamageCause.THORNS;
     }
 
     private LivingEntity attacker(EntityDamageEvent event) {
-        if (!(event instanceof EntityDamageByEntityEvent byEntity)) return null;
-        Entity damager = byEntity.getDamager();
-        if (damager instanceof Player player) return player;
-        if (damager instanceof Projectile projectile && projectile.getShooter() instanceof LivingEntity living) return living;
+        if (event instanceof EntityDamageByEntityEvent byEntity) {
+            Entity damager = byEntity.getDamager();
+            if (damager instanceof Player player) return player;
+            if (damager instanceof Projectile projectile && projectile.getShooter() instanceof LivingEntity living) return living;
+            if (damager instanceof org.bukkit.entity.AreaEffectCloud cloud && cloud.getSource() instanceof LivingEntity living) return living;
+            if (damager instanceof org.bukkit.entity.TNTPrimed tnt && tnt.getSource() instanceof LivingEntity living) return living;
+        }
+        DamageCause cause = event.getCause();
+        boolean attributableStatus = cause == DamageCause.POISON || cause == DamageCause.WITHER
+                || cause == DamageCause.MAGIC || cause == DamageCause.DRAGON_BREATH
+                || cause == DamageCause.THORNS;
+        if (attributableStatus && event.getEntity() instanceof Player victim && System.currentTimeMillis()
+                - recentPlayerAttackAt.getOrDefault(victim.getUniqueId(), 0L) <= plugin.getConfig().getLong("combat.timeout-seconds", 15) * 1000L) {
+            UUID attacker = recentPlayerAttacker.get(victim.getUniqueId());
+            if (attacker != null) return plugin.getServer().getPlayer(attacker);
+        }
         return null;
     }
     private boolean isVanguard(Player player) { return progress.get(player.getUniqueId()).vanguard; }
@@ -337,8 +355,6 @@ final class VanguardAbilityListener implements Listener {
         return item != null && (item.getType().name().endsWith("_SWORD") || item.getType().name().endsWith("_AXE"));
     }
     private long counterWindowMillis(VanguardProgression.Upgrade upgrade) {
-        return plugin.getConfig().getLong(upgrade == VanguardProgression.Upgrade.DORMANT
-                ? "vanguard.bloodthirst.dormant-window-ms" : "vanguard.bloodthirst.imperfect-window-ms",
-                upgrade == VanguardProgression.Upgrade.DORMANT ? 750 : 1000);
+        return VanguardRules.bloodthirstWindowMillis(upgrade);
     }
 }

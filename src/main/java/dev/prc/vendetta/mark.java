@@ -52,6 +52,7 @@ public final class mark extends JavaPlugin implements Listener {
     private final Map<UUID, Long> balances = new HashMap<>();
     private final Map<String, Long> recentKills = new HashMap<>();
     private final Set<UUID> deathPenaltyProcessed = new HashSet<>();
+    private final Set<UUID> pvpSettlementSuppressed = new HashSet<>();
     private final Set<UUID> rightClickDepositGuard = new HashSet<>();
     private File balanceFile;
     private YamlConfiguration balanceData;
@@ -63,9 +64,14 @@ public final class mark extends JavaPlugin implements Listener {
     private YamlConfiguration allyData;
     private final Map<UUID, Set<UUID>> allies = new HashMap<>();
     private VanguardProgression vanguardProgression;
+    private ClassProgression classProgression;
     private VanguardAbilityListener vanguardAbilities;
     private CurrencyService currency;
     private ClassSelectionService classSelection;
+    private ClassInventoryRules classInventoryRules;
+    private ClassAbilityListener classAbilities;
+    private WardenUltimateService wardenUltimates;
+    private CombatLogService combatLogs;
     private File pendingFile, dailyFile, abuseFile;
     private YamlConfiguration pendingData, dailyData;
     private final List<String> abuseLog = new ArrayList<>();
@@ -113,14 +119,23 @@ public final class mark extends JavaPlugin implements Listener {
             } catch (IllegalArgumentException ignored) { }
         }
         vanguardProgression = new VanguardProgression(getDataFolder());
+        classProgression = new ClassProgression(getDataFolder());
         currency = new CurrencyService(this);
         classSelection = new ClassSelectionService(this, vanguardProgression);
+        classInventoryRules = new ClassInventoryRules(this);
+        classAbilities = new ClassAbilityListener(this, classProgression);
+        wardenUltimates = new WardenUltimateService(this, classProgression);
+        combatLogs = new CombatLogService(this);
         getServer().getPluginManager().registerEvents(this, this);
         getServer().getPluginManager().registerEvents(classSelection, this);
+        getServer().getPluginManager().registerEvents(classInventoryRules, this);
+        getServer().getPluginManager().registerEvents(classAbilities, this);
+        getServer().getPluginManager().registerEvents(wardenUltimates, this);
+        getServer().getPluginManager().registerEvents(combatLogs, this);
         vanguardAbilities = new VanguardAbilityListener(this, vanguardProgression);
         getServer().getPluginManager().registerEvents(vanguardAbilities, this);
         getServer().getPluginManager().registerEvents(new VanguardActivationHandler(this, vanguardProgression, vanguardAbilities), this);
-        RelicService relicService = new RelicService(this, vanguardProgression);
+        RelicService relicService = new RelicService(this, vanguardProgression, classProgression);
         getServer().getPluginManager().registerEvents(relicService, this);
         registerPermission("venmark.use", PermissionDefault.TRUE, "Use VenMark player commands");
         registerPermission("venmark.admin", PermissionDefault.OP, "Manage VenMark economy data");
@@ -142,6 +157,9 @@ public final class mark extends JavaPlugin implements Listener {
     @Override
     public void onDisable() {
         if (vanguardAbilities != null) vanguardAbilities.shutdown();
+        if (classAbilities != null) classAbilities.shutdown();
+        if (wardenUltimates != null) wardenUltimates.shutdown();
+        if (combatLogs != null) combatLogs.shutdown();
         saveBalances();
         saveKillCooldowns();
         saveBounties();
@@ -150,6 +168,7 @@ public final class mark extends JavaPlugin implements Listener {
         classSelection.save();
         saveAllies();
         vanguardProgression.saveAll();
+        classProgression.saveAll();
     }
 
     @EventHandler
@@ -194,19 +213,24 @@ public final class mark extends JavaPlugin implements Listener {
         if (!(event.getEntity() instanceof Player victim)) return;
         if (event instanceof PlayerDeathEvent playerDeath && deathPenaltyProcessed.add(victim.getUniqueId())
                 && qualifiedMobAttacker(victim) != null) applyMobCurrencyPenalty(playerDeath, victim);
-        Player killer = qualifiedAttacker(victim);
-        if (killer == null || killer.equals(victim)) return;
+        if (pvpSettlementSuppressed.contains(victim.getUniqueId())) {
+            getServer().getScheduler().runTask(this, () -> pvpSettlementSuppressed.remove(victim.getUniqueId()));
+            return;
+        }
+        UUID killerId = combatLogs == null ? null : combatLogs.killerFor(victim);
+        if (killerId == null || killerId.equals(victim.getUniqueId())) return;
+        Player killer = getServer().getPlayer(killerId);
         payBounty(victim, killer);
 
         long now = System.currentTimeMillis();
         long cooldown = Math.max(0L, getConfig().getLong("pvp.repeat-kill-cooldown-seconds", 600)) * 1000L;
         String firstId = victim.getUniqueId().toString();
-        String secondId = killer.getUniqueId().toString();
+        String secondId = killerId.toString();
         String pair = firstId.compareTo(secondId) < 0 ? firstId + ":" + secondId : secondId + ":" + firstId;
         Long previous = recentKills.get(pair);
         if (previous != null && now - previous < cooldown) {
             recordAbuse("repeat-pair blocked killer=" + secondId + " victim=" + firstId + " time=" + now + " reward=0");
-            killer.sendMessage(color("&cNo Marks awarded: repeated kills are blocked for "
+            if (killer != null) killer.sendMessage(color("&cNo Marks awarded: repeated kills are blocked for "
                     + Math.max(1, (cooldown - (now - previous) + 999) / 1000) + " more seconds."));
             return;
         }
@@ -215,7 +239,7 @@ public final class mark extends JavaPlugin implements Listener {
         saveKillCooldowns();
 
         String localDay = LocalDate.now(ZoneId.systemDefault()).toString();
-        String dailyPath = killer.getUniqueId() + ".";
+        String dailyPath = killerId + ".";
         if (!localDay.equals(dailyData.getString(dailyPath + "date"))) {
             dailyData.set(dailyPath + "date", localDay);
             dailyData.set(dailyPath + "used", 0);
@@ -225,7 +249,7 @@ public final class mark extends JavaPlugin implements Listener {
         int used = dailyData.getInt(dailyPath + "used");
         if (used >= 3) {
             recordAbuse("daily-limit killer=" + secondId + " victim=" + firstId + " time=" + now + " used=" + used);
-            killer.sendMessage(color("&cDaily PvP reward limit reached (3/3)."));
+            if (killer != null) killer.sendMessage(color("&cDaily PvP reward limit reached (3/3)."));
             return;
         }
         dailyData.set(dailyPath + "used", used + 1);
@@ -239,15 +263,18 @@ public final class mark extends JavaPlugin implements Listener {
         long transfer = Math.min(calculatedLoss, 2500L);
         long reward = Math.max(0L, getConfig().getLong("pvp.base-reward", 500));
         set(victim.getUniqueId(), victimBalance - calculatedLoss);
-        credit(killer.getUniqueId(), transfer, "PvP bank transfer from " + victim.getUniqueId());
+        credit(killerId, transfer, "PvP bank transfer from " + victim.getUniqueId());
         if (calculatedLoss > transfer) recordAbuse("pvp-transfer-cap sink=" + (calculatedLoss - transfer) + " killer=" + secondId + " victim=" + firstId + " time=" + now);
-        credit(killer.getUniqueId(), reward, "PvP daily reward");
+        credit(killerId, reward, "PvP daily reward");
         recordAbuse("pvp-settlement killer=" + secondId + " victim=" + firstId + " time=" + now + " bank-loss=" + calculatedLoss + " transferred=" + transfer + " base-reward=" + reward + " daily=" + (used + 1) + "/3");
-        killer.sendMessage(color("&a+" + reward + " Marks &7for defeating " + victim.getName()
-                + ". Balance: &e" + balance(killer.getUniqueId())));
+        if (killer != null) killer.sendMessage(color("&a+" + reward + " Marks &7for defeating " + victim.getName()
+                + ". Balance: &e" + balance(killerId)));
         victim.sendMessage(color("&c-" + calculatedLoss + " Marks &7for being defeated. Balance: &e"
                 + balance(victim.getUniqueId())));
     }
+
+    void suppressNextPvpSettlement(UUID playerId) { pvpSettlementSuppressed.add(playerId); }
+    boolean suppressesDeathReward(UUID playerId) { return pvpSettlementSuppressed.contains(playerId); }
 
     @EventHandler(ignoreCancelled = false)
     public void onCurrencyRightClick(PlayerInteractEvent event) {
@@ -475,6 +502,7 @@ public final class mark extends JavaPlugin implements Listener {
         long oldMarks = bountyData.getLong(key + ".marks");
         long oldDiamonds = bountyData.getLong(key + ".diamonds");
         long oldStars = bountyData.getLong(key + ".stars");
+        boolean hadBounty = oldMarks > 0 || oldDiamonds > 0 || oldStars > 0 || !storedItems.isEmpty();
         List<?> oldItems = List.copyOf(storedItems);
         for (String type : new String[]{"diamonds", "stars"}) {
             long recorded = Math.max(0, bountyData.getLong(key + "." + type));
@@ -501,10 +529,10 @@ public final class mark extends JavaPlugin implements Listener {
         }
         // Commit the one-time claim before spawning drops, so duplicate death handling cannot pay twice.
         for (ItemStack item : bountyDrops) victim.getWorld().dropItemNaturally(victim.getLocation(), item);
-        if (!storedItems.isEmpty()) {
+        if (hadBounty) {
             for (ItemStack dye : currency.itemsFor(250)) victim.getWorld().dropItemNaturally(victim.getLocation(), dye);
         }
-        killer.sendMessage(color("&6Bounty drops for defeating " + victim.getName() + " are on the ground."));
+        if (killer != null) killer.sendMessage(color("&6Bounty drops for defeating " + victim.getName() + " are on the ground."));
     }
 
     private void showTop(CommandSender sender) {
@@ -535,6 +563,13 @@ public final class mark extends JavaPlugin implements Listener {
     Set<UUID> alliesOf(UUID owner) { return Set.copyOf(allies.getOrDefault(owner, Set.of())); }
     long getMarks(UUID uuid) { return balance(uuid); }
     String selectedClass(UUID uuid) { return classSelection.className(uuid); }
+    void enforceClassInventory(Player player) { if (classInventoryRules != null) classInventoryRules.enforce(player); }
+    void applyClassAbilities(Player player) { if (classAbilities != null) classAbilities.applyWardenResistance(player); }
+    void classChanged(Player player) {
+        if (vanguardAbilities != null) vanguardAbilities.classChanged(player);
+        if (classAbilities != null) classAbilities.classChanged(player);
+        if (wardenUltimates != null) wardenUltimates.classChanged(player);
+    }
     long bankRoom(UUID uuid) { return MAX_BANK - balance(uuid); }
     long currencyDenomination(ItemStack item) { return currency.denomination(item); }
     List<ItemStack> currencyItems(long denomination, int count) { return List.of(currency.create(denomination, count)); }
