@@ -78,7 +78,8 @@ final class ClassAbilityListener implements Listener {
         long now = System.currentTimeMillis();
         UUID id = player.getUniqueId();
         long cooldown = Math.max(predatorCooldown.getOrDefault(id, 0L), progression.cooldown(id, "predators_instinct"));
-        if (cooldown > now || predatorArmedUntil.getOrDefault(id, 0L) > now) return;
+        if ((!plugin.opCooldownBypass(player) && cooldown > now)
+                || predatorArmedUntil.getOrDefault(id, 0L) > now) return;
         predatorArmedUntil.put(id, now + 1000L);
         player.sendMessage(plugin.message("&bPredator's Instinct armed"));
     }
@@ -87,7 +88,7 @@ final class ClassAbilityListener implements Listener {
         UUID id = player.getUniqueId();
         long now = System.currentTimeMillis();
         long ready = progression.cooldown(id, "sculk_pulse");
-        if (ready > now) return;
+        if (ready > now && !plugin.opCooldownBypass(player)) return;
         progression.cooldown(id, "sculk_pulse", now + 20_000L);
         try { progression.save(id); }
         catch (RuntimeException ex) { progression.cooldown(id, "sculk_pulse", ready); return; }
@@ -107,7 +108,7 @@ final class ClassAbilityListener implements Listener {
         long now = System.currentTimeMillis();
         long ready = progression.cooldown(id, "into_the_void");
         if (activeVoids.contains(id)) { finishVoid(player); return; }
-        if (ready > now) return;
+        if (ready > now && !plugin.opCooldownBypass(player)) return;
         VanguardProgression.Upgrade tier = progression.tier(id, "into_the_void");
         progression.cooldown(id, "into_the_void", now + 300_000L);
         try { progression.save(id); }
@@ -158,6 +159,12 @@ final class ClassAbilityListener implements Listener {
                 }
             }
         }
+        if (eligibleCombatDamage(event)) {
+            if (attacker != null && plugin.isBossMob(event.getEntity()))
+                combatUntil.put(attacker.getUniqueId(), now + COMBAT_MS);
+            if (victim != null && plugin.isBossAttack(event))
+                combatUntil.put(victim.getUniqueId(), now + COMBAT_MS);
+        }
         if (victim != null && activeVoids.contains(victim.getUniqueId())) {
             lastAttackAt.put(victim.getUniqueId(), now);
             combatUntil.put(victim.getUniqueId(), now + COMBAT_MS);
@@ -171,6 +178,10 @@ final class ClassAbilityListener implements Listener {
                 if (activeVoids.contains(attacker.getUniqueId()) && combatUntil.getOrDefault(attacker.getUniqueId(), 0L) > System.currentTimeMillis())
                     refreshVoid(attacker, true);
             }, 60L);
+        }
+        if (attacker != null && plugin.isBossMob(event.getEntity()) && activeVoids.contains(attacker.getUniqueId())) {
+            lastAttackAt.put(attacker.getUniqueId(), now);
+            combatUntil.put(attacker.getUniqueId(), now + COMBAT_MS);
         }
         if (attacker != null && victim != null && attacker != victim && activeVoids.contains(attacker.getUniqueId())) {
             VanguardProgression.Upgrade tier = progression.tier(attacker.getUniqueId(), "into_the_void");
@@ -317,6 +328,13 @@ final class ClassAbilityListener implements Listener {
             };
         }
         return null;
+    }
+
+    private boolean eligibleCombatDamage(EntityDamageEvent event) {
+        return event instanceof EntityDamageByEntityEvent || switch (event.getCause()) {
+            case POISON, WITHER, MAGIC, DRAGON_BREATH, THORNS -> true;
+            default -> false;
+        };
     }
 
     @EventHandler public void onJoin(PlayerJoinEvent event) { applyWardenResistance(event.getPlayer()); }

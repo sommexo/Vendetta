@@ -102,7 +102,7 @@ final class RelicService implements Listener {
         if (!List.of("vanguard", "phantom", "warden").contains(clazz)) return;
         String classUltimate = "vanguard".equals(clazz) ? "ultimate" : "class_relic";
         if (tier == 3) {
-            if (!List.of(classUltimate, abilityKey(clazz, "ultimate")).contains(ability)) { player.sendMessage(plugin.message("&cAscendant relics only upgrade the ultimate.")); return; }
+            if (!List.of(classUltimate, abilityKey(clazz, "ultimate"), "class_relic").contains(ability)) { player.sendMessage(plugin.message("&cAscendant relics only upgrade the ultimate.")); return; }
             applyRelicUpgrade(player, hand, "ultimate", 3);
         } else if (tier == 1) {
             if (!List.of("select", "class_relic", "berserker", "bloodthirst", "predators_instinct", "marked_prey", "unshaken", "sculk_pulse").contains(ability)) {
@@ -110,8 +110,10 @@ final class RelicService implements Listener {
             }
             openAbilityMenu(player, hand, tier, clazz);
         } else if (tier == 2) {
-            if (!List.of(classUltimate, abilityKey(clazz, "ultimate")).contains(ability)) { player.sendMessage(plugin.message("&cPerfect relics only upgrade the class ultimate.")); return; }
-            applyRelicUpgrade(player, hand, "ultimate", tier);
+            if (List.of(classUltimate, abilityKey(clazz, "ultimate"), "select", "class_relic").contains(ability)
+                    || isRegularAbility(clazz, ability)) {
+                openAbilityMenu(player, hand, tier, clazz);
+            } else player.sendMessage(plugin.message("&cUnknown ability on this relic."));
         } else player.sendMessage(plugin.message("&cInvalid relic tier."));
     }
 
@@ -135,13 +137,24 @@ final class RelicService implements Listener {
         return switch (clazz) {
             case "vanguard" -> tier == 1
                     ? List.of("select", "berserker", "bloodthirst").contains(ability)
-                    : "ultimate".equals(ability);
+                    : List.of("select", "ultimate", "berserker", "bloodthirst").contains(ability);
             case "phantom" -> "class_relic".equals(ability)
                     || tier == 1 && List.of("predators_instinct", "marked_prey").contains(ability)
-                    || tier >= 2 && "into_the_void".equals(ability);
+                    || tier == 2 && List.of("predators_instinct", "marked_prey", "into_the_void").contains(ability)
+                    || tier == 3 && "into_the_void".equals(ability);
             case "warden" -> "class_relic".equals(ability)
                     || tier == 1 && List.of("unshaken", "sculk_pulse").contains(ability)
-                    || tier >= 2 && "ancient_guardian".equals(ability);
+                    || tier == 2 && List.of("unshaken", "sculk_pulse", "ancient_guardian").contains(ability)
+                    || tier == 3 && "ancient_guardian".equals(ability);
+            default -> false;
+        };
+    }
+
+    private boolean isRegularAbility(String clazz, String ability) {
+        return switch (clazz) {
+            case "vanguard" -> List.of("berserker", "bloodthirst").contains(ability);
+            case "phantom" -> List.of("predators_instinct", "marked_prey").contains(ability);
+            case "warden" -> List.of("unshaken", "sculk_pulse").contains(ability);
             default -> false;
         };
     }
@@ -156,12 +169,15 @@ final class RelicService implements Listener {
             VanguardProgression.PlayerData data = progression.get(player.getUniqueId());
             putAbility(inventory, 11, Material.IRON_SWORD, "Berserker", "Low-health outgoing damage bonus", data.berserker, relicTier);
             putAbility(inventory, 15, Material.SHIELD, "Bloodthirst", "Sword counter that heals on a successful counter", data.bloodthirst, relicTier);
+            if (relicTier == 2) putAbility(inventory, 13, Material.TOTEM_OF_UNDYING, "BLOOD BLOOD BLOOD", "Vanguard combat ultimate", data.ultimate, relicTier);
         } else if ("phantom".equals(clazz)) {
             putAbility(inventory, 11, Material.IRON_SWORD, "Predator's Instinct", "Timed sword counter", classProgression.tier(player.getUniqueId(), "predators_instinct"), relicTier);
             putAbility(inventory, 15, Material.ENDER_EYE, "Marked Prey", "Glowing when you are attacked", classProgression.tier(player.getUniqueId(), "marked_prey"), relicTier);
+            if (relicTier == 2) putAbility(inventory, 13, Material.ENDER_PEARL, "Into the Void", "Phantom stealth ultimate", classProgression.tier(player.getUniqueId(), "into_the_void"), relicTier);
         } else {
             putAbility(inventory, 11, Material.NETHERITE_CHESTPLATE, "Unshaken", "Knockback resistance", classProgression.tier(player.getUniqueId(), "unshaken"), relicTier);
             putAbility(inventory, 15, Material.SCULK_SENSOR, "Sculk Pulse", "Reveal nearby enemy players", classProgression.tier(player.getUniqueId(), "sculk_pulse"), relicTier);
+            if (relicTier == 2) putAbility(inventory, 13, Material.SHIELD, "Ancient Guardian", "Warden defensive ultimate", classProgression.tier(player.getUniqueId(), "ancient_guardian"), relicTier);
         }
         player.openInventory(inventory);
     }
@@ -185,9 +201,10 @@ final class RelicService implements Listener {
         String ability = switch (event.getRawSlot()) {
             case 11 -> holder.className.equals("vanguard") ? "berserker" : holder.className.equals("phantom") ? "predators_instinct" : "unshaken";
             case 15 -> holder.className.equals("vanguard") ? "bloodthirst" : holder.className.equals("phantom") ? "marked_prey" : "sculk_pulse";
+            case 13 -> holder.relicTier == 2 ? "ultimate" : null;
             default -> null;
         };
-        if (ability == null) { player.sendMessage(plugin.message("&cSelect one of the two displayed regular abilities.")); return; }
+        if (ability == null) { player.sendMessage(plugin.message("&cSelect an available ability from the menu.")); return; }
         if (applyRelicUpgrade(player, holder.hand, ability, holder.relicTier)) {
             holder.resolved = true;
             player.closeInventory();
@@ -315,14 +332,14 @@ final class RelicService implements Listener {
         Inventory inventory = Bukkit.createInventory(new RelicShopHolder(), 27, ChatColor.DARK_PURPLE + "Cleric Relics");
         RelicShopHolder holder = (RelicShopHolder) inventory.getHolder();
         holder.inventory = inventory;
-        String relicClass = plugin.selectedClass(event.getPlayer().getUniqueId());
-        if (relicClass == null) { event.getPlayer().sendMessage(plugin.message("&cChoose a class before using relic shops.")); return; }
+        String[] classes = {"vanguard", "warden", "phantom"};
+        int[] slots = {10, 11, 12, 14, 15, 16, 19, 20, 21};
         int offerIndex = 0;
-        for (int slot : new int[]{11, 13, 15}) {
-            int tier = ++offerIndex;
-            // Every designated cleric offers each relic tier; this guarantees Ascendant
-            // availability at Master without adding a custom rarity or reroll mechanic.
-            String ability = "vanguard".equals(relicClass) ? (tier == 1 ? "select" : "ultimate") : "class_relic";
+        for (int tier = 1; tier <= 3; tier++) for (String relicClass : classes) {
+            int slot = slots[offerIndex++];
+            // The designated merchant always exposes a stable 3x3 class/tier matrix.
+            // In particular, every Master cleric has all three Ascendant class offers.
+            String ability = merchantAbility(relicClass, tier);
             long price = tier == 1 ? 1000 : 2000;
             ItemStack item = createRelic(relicClass, ability, tier);
             ItemMeta meta = item.getItemMeta();
@@ -337,6 +354,11 @@ final class RelicService implements Listener {
             inventory.setItem(slot, item);
         }
         event.getPlayer().openInventory(inventory);
+    }
+
+    private String merchantAbility(String relicClass, int tier) {
+        if (tier == 3 && "vanguard".equals(relicClass)) return "ultimate";
+        return "vanguard".equals(relicClass) ? "select" : "class_relic";
     }
 
     @EventHandler(ignoreCancelled = true)
@@ -485,13 +507,22 @@ final class RelicService implements Listener {
             }
             String ultimate = abilityKey(clazz, "ultimate");
             VanguardProgression.Upgrade current = classProgression.tier(player.getUniqueId(), ultimate);
-            return tier == 2 && "class_relic".equals(ability) && current != VanguardProgression.Upgrade.PERFECT && current != VanguardProgression.Upgrade.ASCENDANT
-                    || tier == 3 && "class_relic".equals(ability) && current == VanguardProgression.Upgrade.PERFECT;
+            if (tier == 2 && "class_relic".equals(ability)) {
+                String[] regular = clazz.equals("phantom") ? new String[]{"predators_instinct", "marked_prey"} : new String[]{"unshaken", "sculk_pulse"};
+                for (String key : regular) if (classProgression.tier(player.getUniqueId(), key) == VanguardProgression.Upgrade.IMPERFECT) return true;
+                return current != VanguardProgression.Upgrade.PERFECT && current != VanguardProgression.Upgrade.ASCENDANT;
+            }
+            return tier == 3 && "class_relic".equals(ability) && current == VanguardProgression.Upgrade.PERFECT;
         }
         VanguardProgression.PlayerData data = progression.get(player.getUniqueId());
         if (tier == 1 && "select".equals(ability))
             return data.berserker == VanguardProgression.Upgrade.DORMANT
                     || data.bloodthirst == VanguardProgression.Upgrade.DORMANT;
+        if (tier == 2 && "select".equals(ability))
+            return data.berserker == VanguardProgression.Upgrade.IMPERFECT
+                    || data.bloodthirst == VanguardProgression.Upgrade.IMPERFECT
+                    || data.ultimate != VanguardProgression.Upgrade.PERFECT
+                    && data.ultimate != VanguardProgression.Upgrade.ASCENDANT;
         VanguardProgression.Upgrade current = switch (ability) {
             case "berserker" -> data.berserker;
             case "bloodthirst", "headweb" -> data.bloodthirst;

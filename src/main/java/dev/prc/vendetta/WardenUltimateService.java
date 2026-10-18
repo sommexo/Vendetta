@@ -77,7 +77,7 @@ final class WardenUltimateService implements Listener {
         }
         long now = System.currentTimeMillis();
         long ready = progression.cooldown(id, "ancient_guardian");
-        if (ready > now) {
+        if (ready > now && !plugin.opCooldownBypass(warden)) {
             warden.sendMessage(plugin.message("&cAncient Guardian ready in " + ((ready - now + 999) / 1000) + "s."));
             return;
         }
@@ -200,6 +200,14 @@ final class WardenUltimateService implements Listener {
             }
             for (Ultimate ultimate : ultimates.values()) combatUntil.put(ultimate.owner, ultimate.combatUntil);
         }
+        if (victim != null && plugin.isBossAttack(event)) {
+            combatUntil.put(victim.getUniqueId(), now + COMBAT_TIMEOUT);
+            refreshCombatForSide(victim.getUniqueId(), now);
+        }
+        if (attacker != null && plugin.isBossMob(event.getEntity())) {
+            combatUntil.put(attacker.getUniqueId(), now + COMBAT_TIMEOUT);
+            refreshCombatForSide(attacker.getUniqueId(), now);
+        }
         if (victim != null && unyielding.contains(victim.getUniqueId())) {
             event.setDamage(event.getDamage() * 0.40);
             return;
@@ -225,6 +233,12 @@ final class WardenUltimateService implements Listener {
             double multiplier = WardenRules.cardMultiplier(ultimate.cards);
             event.setDamage(event.getDamage() * multiplier);
             if (event.getDamage() > 0) ultimate.cards = Math.min(50, ultimate.cards + 1);
+        }
+    }
+
+    private void refreshCombatForSide(UUID participant, long now) {
+        for (Ultimate ultimate : ultimates.values()) {
+            if (sameSide(ultimate.owner, participant)) ultimate.combatUntil = now + COMBAT_TIMEOUT;
         }
     }
 

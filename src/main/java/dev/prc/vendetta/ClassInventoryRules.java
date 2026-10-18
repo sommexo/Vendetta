@@ -11,6 +11,8 @@ import org.bukkit.event.inventory.InventoryDragEvent;
 import org.bukkit.event.inventory.InventoryMoveItemEvent;
 import org.bukkit.event.entity.EntityPickupItemEvent;
 import org.bukkit.event.player.PlayerJoinEvent;
+import org.bukkit.event.player.PlayerItemHeldEvent;
+import org.bukkit.event.player.PlayerSwapHandItemsEvent;
 import org.bukkit.inventory.ItemStack;
 
 import java.util.HashSet;
@@ -77,6 +79,12 @@ final class ClassInventoryRules implements Listener {
     }
 
     @EventHandler public void onJoin(PlayerJoinEvent event) { queue(event.getPlayer()); }
+
+    @EventHandler(ignoreCancelled = true)
+    public void onHotbarChange(PlayerItemHeldEvent event) { queue(event.getPlayer()); }
+
+    @EventHandler(ignoreCancelled = true)
+    public void onSwapHands(PlayerSwapHandItemsEvent event) { queue(event.getPlayer()); }
 
     @EventHandler(priority = EventPriority.HIGHEST, ignoreCancelled = true)
     public void onInventoryClick(InventoryClickEvent event) {

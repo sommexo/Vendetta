@@ -18,6 +18,8 @@ final class VanguardProgression {
         Upgrade ultimate = Upgrade.DORMANT;
         long ultimateReadyAt;
         long bloodthirstReadyAt;
+        int grimReaperLevel;
+        int ascendantKillStreak;
         int killStreak;
     }
 
@@ -43,7 +45,10 @@ final class VanguardProgression {
                 data.ultimateReadyAt = yaml.getLong(root + "cooldowns.ultimate");
                 data.bloodthirstReadyAt = yaml.getLong(root + "cooldowns.bloodthirst",
                         yaml.getLong(root + "cooldowns.headweb"));
-                data.killStreak = Math.max(0, yaml.getInt(root + "kill-streak"));
+                int legacyKillStreak = Math.max(0, yaml.getInt(root + "kill-streak"));
+                data.grimReaperLevel = Math.max(0, yaml.getInt(root + "grim-reaper-level", legacyKillStreak));
+                data.ascendantKillStreak = Math.max(0, yaml.getInt(root + "ascendant-kill-streak", legacyKillStreak));
+                data.killStreak = data.ascendantKillStreak;
                 players.put(uuid, data);
             } catch (IllegalArgumentException ignored) { }
         }
@@ -61,7 +66,10 @@ final class VanguardProgression {
         yaml.set(root + "abilities.ultimate", data.ultimate.name());
         yaml.set(root + "cooldowns.ultimate", data.ultimateReadyAt);
         yaml.set(root + "cooldowns.bloodthirst", data.bloodthirstReadyAt);
-        yaml.set(root + "kill-streak", data.killStreak);
+        yaml.set(root + "grim-reaper-level", data.grimReaperLevel);
+        yaml.set(root + "ascendant-kill-streak", data.ascendantKillStreak);
+        // Keep the old key readable by older administrative tooling.
+        yaml.set(root + "kill-streak", data.ascendantKillStreak);
         try { yaml.save(file); } catch (IOException ex) { throw new IllegalStateException("Could not save Vanguard progression", ex); }
     }
     void saveAll() { for (UUID uuid : players.keySet()) save(uuid); }

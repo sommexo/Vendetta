@@ -17,4 +17,9 @@ final class VanguardRules {
     static long bloodthirstWindowMillis(VanguardProgression.Upgrade tier) {
         return tier == VanguardProgression.Upgrade.IMPERFECT ? 1_000L : 750L;
     }
+
+    static boolean blocksUltimateFood(boolean vanguard, boolean ultimateActive,
+                                      VanguardProgression.Upgrade ultimateTier) {
+        return vanguard && ultimateActive && ultimateTier == VanguardProgression.Upgrade.IMPERFECT;
+    }
 }

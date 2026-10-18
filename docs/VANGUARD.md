@@ -10,7 +10,7 @@
 
 ## Relics
 
-Relics can be found when opening containers or bought from designated naturally spawned cleric villagers with genuine physical currency. Each relic shop displays Imperfect, Perfect, and Ascendant offers; Master clerics therefore always offer Ascendant. Imperfect costs one genuine VenMark Nether Star, Perfect costs two, and Ascendant costs two plus the class-specific Netherite item. Ascendant requires the ultimate to be Perfect. There is no relic purchase command. Right-click a relic to apply it to its matching Vanguard ability.
+Relics can be found when opening containers or bought from designated naturally spawned cleric villagers with genuine physical currency. Each relic shop displays all three classes across Imperfect, Perfect, and Ascendant offers; Master clerics therefore always offer Ascendant relics for all three classes. Imperfect costs one genuine VenMark Nether Star, Perfect costs two, and Ascendant costs two plus the class-specific Netherite item. Perfect can upgrade an eligible regular ability or ultimate; Ascendant requires the ultimate to be Perfect. Right-click a relic to apply it to its matching Vanguard ability or open its ability choice menu.
 
 ## Implementation choices
 

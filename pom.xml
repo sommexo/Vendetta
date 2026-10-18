@@ -5,7 +5,7 @@
     <modelVersion>4.0.0</modelVersion>
 
     <groupId>dev.prc</groupId>
-    <artifactId>venmark</artifactId>
+    <artifactId>vendetta</artifactId>
     <version>v1-beta-build-4</version>
     <packaging>jar</packaging>
 

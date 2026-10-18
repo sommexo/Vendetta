@@ -51,7 +51,7 @@ public final class mark extends JavaPlugin implements Listener {
     static final long MAX_BANK = 20_000L;
     private final Map<UUID, Long> balances = new HashMap<>();
     private final Map<String, Long> recentKills = new HashMap<>();
-    private final Set<UUID> deathPenaltyProcessed = new HashSet<>();
+    private final Set<UUID> deathEventsProcessed = new HashSet<>();
     private final Set<UUID> pvpSettlementSuppressed = new HashSet<>();
     private final Set<UUID> rightClickDepositGuard = new HashSet<>();
     private File balanceFile;
@@ -211,15 +211,32 @@ public final class mark extends JavaPlugin implements Listener {
     @EventHandler
     public void onPlayerDeath(EntityDeathEvent event) {
         if (!(event.getEntity() instanceof Player victim)) return;
-        if (event instanceof PlayerDeathEvent playerDeath && deathPenaltyProcessed.add(victim.getUniqueId())
-                && qualifiedMobAttacker(victim) != null) applyMobCurrencyPenalty(playerDeath, victim);
+        // A malformed or repeated death dispatch must settle this death only once.
+        // The marker is cleared on respawn so later deaths are handled normally.
+        if (!deathEventsProcessed.add(victim.getUniqueId())) return;
+        if (event instanceof PlayerDeathEvent playerDeath && qualifiedMobAttacker(victim) != null)
+            applyMobCurrencyPenalty(playerDeath, victim);
+        if (qualifiedMobAttacker(victim) != null) return;
         if (pvpSettlementSuppressed.contains(victim.getUniqueId())) {
             getServer().getScheduler().runTask(this, () -> pvpSettlementSuppressed.remove(victim.getUniqueId()));
             return;
         }
         UUID killerId = combatLogs == null ? null : combatLogs.killerFor(victim);
         if (killerId == null || killerId.equals(victim.getUniqueId())) return;
+        if (!qualifyingPvpFinalDamage(victim, killerId)) return;
         Player killer = getServer().getPlayer(killerId);
+        settlePvpDeath(victim, killerId, killer);
+    }
+
+    void resolveCombatLog(Player victim, UUID killerId) {
+        if (killerId == null || killerId.equals(victim.getUniqueId())) return;
+        suppressNextPvpSettlement(victim.getUniqueId());
+        settlePvpDeath(victim, killerId, getServer().getPlayer(killerId));
+        getServer().getScheduler().runTaskLater(this,
+                () -> pvpSettlementSuppressed.remove(victim.getUniqueId()), 2L);
+    }
+
+    private void settlePvpDeath(Player victim, UUID killerId, Player killer) {
         payBounty(victim, killer);
 
         long now = System.currentTimeMillis();
@@ -275,6 +292,7 @@ public final class mark extends JavaPlugin implements Listener {
 
     void suppressNextPvpSettlement(UUID playerId) { pvpSettlementSuppressed.add(playerId); }
     boolean suppressesDeathReward(UUID playerId) { return pvpSettlementSuppressed.contains(playerId); }
+    CombatLogService combatLogs() { return combatLogs; }
 
     @EventHandler(ignoreCancelled = false)
     public void onCurrencyRightClick(PlayerInteractEvent event) {
@@ -308,6 +326,20 @@ public final class mark extends JavaPlugin implements Listener {
         LivingEntity attacker = damager instanceof LivingEntity living ? living
                 : damager instanceof Projectile projectile && projectile.getShooter() instanceof LivingEntity living ? living : null;
         return attacker instanceof Player || attacker == victim ? null : attacker;
+    }
+
+    private boolean qualifyingPvpFinalDamage(Player victim, UUID killerId) {
+        if (combatLogs != null && combatLogs.isResolving(victim.getUniqueId())) return true;
+        EntityDamageEvent cause = victim.getLastDamageCause();
+        if (cause instanceof EntityDamageByEntityEvent) {
+            Player direct = qualifiedAttacker(victim);
+            return direct != null && direct.getUniqueId().equals(killerId);
+        }
+        if (cause == null) return false;
+        return switch (cause.getCause()) {
+            case POISON, WITHER, MAGIC, DRAGON_BREATH, THORNS -> true;
+            default -> false;
+        };
     }
 
     private void applyMobCurrencyPenalty(PlayerDeathEvent event, Player victim) {
@@ -363,7 +395,7 @@ public final class mark extends JavaPlugin implements Listener {
 
     @EventHandler
     public void clearDeathPenaltyGuard(PlayerRespawnEvent event) {
-        deathPenaltyProcessed.remove(event.getPlayer().getUniqueId());
+        deathEventsProcessed.remove(event.getPlayer().getUniqueId());
     }
 
     public void handleCommand(CommandSender sender, String commandName, String[] args) {
@@ -561,8 +593,55 @@ public final class mark extends JavaPlugin implements Listener {
 
     boolean isAlly(UUID owner, UUID target) { return allies.getOrDefault(owner, Set.of()).contains(target); }
     Set<UUID> alliesOf(UUID owner) { return Set.copyOf(allies.getOrDefault(owner, Set.of())); }
+    boolean isBossMob(Entity entity) {
+        return entity instanceof LivingEntity living
+                && getConfig().getStringList("rewards.boss-mobs").contains(living.getType().name());
+    }
+    boolean isBossAttack(EntityDamageEvent event) {
+        if (!(event instanceof EntityDamageByEntityEvent hit)) return false;
+        Entity damager = hit.getDamager();
+        if (isBossMob(damager)) return true;
+        if (damager instanceof Projectile projectile && projectile.getShooter() instanceof Entity shooter)
+            return isBossMob(shooter);
+        if (damager instanceof org.bukkit.entity.AreaEffectCloud cloud && cloud.getSource() instanceof Entity source)
+            return isBossMob(source);
+        if (damager instanceof org.bukkit.entity.TNTPrimed tnt && tnt.getSource() instanceof Entity source)
+            return isBossMob(source);
+        return false;
+    }
     long getMarks(UUID uuid) { return balance(uuid); }
     String selectedClass(UUID uuid) { return classSelection.className(uuid); }
+
+    VanguardProgression.Upgrade abilityTier(UUID uuid, String ability) {
+        if ("vanguard".equals(selectedClass(uuid))) {
+            VanguardProgression.PlayerData data = vanguardProgression.get(uuid);
+            return switch (ability) {
+                case "berserker" -> data.berserker;
+                case "bloodthirst" -> data.bloodthirst;
+                case "ultimate", "blood-blood-blood" -> data.ultimate;
+                default -> null;
+            };
+        }
+        if ("phantom".equals(selectedClass(uuid))) {
+            String id = switch (ability) {
+                case "predators-instinct" -> "predators_instinct";
+                case "marked-prey" -> "marked_prey";
+                case "into-the-void" -> "into_the_void";
+                default -> null;
+            };
+            return id == null ? null : classProgression.tier(uuid, id);
+        }
+        if ("warden".equals(selectedClass(uuid))) {
+            String id = switch (ability) {
+                case "unshaken" -> "unshaken";
+                case "sculk-pulse" -> "sculk_pulse";
+                case "ancient-guardian" -> "ancient_guardian";
+                default -> null;
+            };
+            return id == null ? null : classProgression.tier(uuid, id);
+        }
+        return null;
+    }
     void enforceClassInventory(Player player) { if (classInventoryRules != null) classInventoryRules.enforce(player); }
     void applyClassAbilities(Player player) { if (classAbilities != null) classAbilities.applyWardenResistance(player); }
     void classChanged(Player player) {

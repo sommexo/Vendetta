@@ -95,6 +95,8 @@ final class CombatLogService implements Listener {
         try { return UUID.fromString(stored); } catch (IllegalArgumentException ex) { return null; }
     }
 
+    boolean isResolving(UUID uuid) { return resolving.containsKey(uuid); }
+
     @EventHandler public void onQuit(PlayerQuitEvent event) {
         UUID id = event.getPlayer().getUniqueId();
         long now = System.currentTimeMillis();
@@ -121,6 +123,7 @@ final class CombatLogService implements Listener {
         plugin.getServer().getScheduler().runTask(plugin, () -> {
             if (!player.isOnline() || player.isDead()) return;
             resolving.put(player.getUniqueId(), killer);
+            plugin.resolveCombatLog(player, killer);
             player.setHealth(0.0);
         });
     }

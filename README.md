@@ -75,11 +75,11 @@ Relic grants use the existing relic factory and server-side metadata. The recipi
 
 ## Class and relic notes
 
-New players receive a class selection GUI. Existing Vanguard progression is migrated as a Vanguard class selection. Imperfect relics cost one genuine 1,000-Mark Nether Star and open the regular ability selection. Perfect upgrades the class ultimate for two genuine Nether Stars. Ascendant upgrades an already-Perfect ultimate for two genuine Nether Stars plus the class-specific Netherite item. Designated naturally spawned clerics display all three tiers; Master clerics therefore guarantee an Ascendant offer. Relics use unique PDC identifiers, tier identifiers, a format version, and a persisted one-use identity ledger. Their visual glint is not used for authentication. Purchases validate progression, payment and delivery space before committing.
+New players receive a class selection GUI. Existing Vanguard progression is migrated as a Vanguard class selection. Imperfect relics cost one genuine 1,000-Mark Nether Star and open the regular ability selection. Perfect relics cost two genuine Nether Stars and can select an eligible regular ability or ultimate. Ascendant upgrades an already-Perfect ultimate for two genuine Nether Stars plus the class-specific Netherite item. Designated naturally spawned clerics display a stable three-class, three-tier offer matrix; Master clerics therefore guarantee Ascendant offers for Vanguard, Warden, and Phantom. Relics use unique PDC identifiers, tier identifiers, a format version, and a persisted one-use identity ledger. Their visual glint is not used for authentication. Purchases validate progression, payment and delivery space before committing.
 
 Combat state expires after 15 seconds without qualifying PvP damage. Direct and supported indirect player damage refreshes that timer. Combat logging is recorded across disconnects and restarts and resolved on rejoin. Warden capture state is in memory and is released on shutdown, restart, logout, world change, cancellation, or ultimate end, so it cannot persist indefinitely.
 
-Genuine Vanguard Imperfect and Perfect relics open a three-choice ability menu. Ascendant relics skip that menu and apply only to the ultimate after its Perfect upgrade.
+Genuine Imperfect relics open the regular ability menu. Genuine Perfect relics open the regular-and-ultimate ability menu. Ascendant relics skip that menu and apply only to the ultimate after its Perfect upgrade.
 
 ## Build
 
