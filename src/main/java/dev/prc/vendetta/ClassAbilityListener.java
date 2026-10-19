@@ -45,6 +45,10 @@ final class ClassAbilityListener implements Listener {
     private final Map<UUID, UUID> recentAttacker = new HashMap<>();
     private final Map<UUID, Long> recentAttackerAt = new HashMap<>();
     private final Map<UUID, Long> lastAttackAt = new HashMap<>();
+    // Incoming damage can keep combat active without counting as an outgoing hit for the escape boost.
+    private final Map<UUID, Long> lastVoidHitAt = new HashMap<>();
+    private final Map<UUID, Long> ascendantSpeedUntil = new HashMap<>();
+    private final Set<UUID> ascendantSpeedUsed = new HashSet<>();
     private final Map<UUID, Long> invisibilityReturnAt = new HashMap<>();
     private final Set<UUID> activeVoids = new HashSet<>();
     private final Map<UUID, Long> voidActivationIds = new HashMap<>();
@@ -132,6 +136,9 @@ final class ClassAbilityListener implements Listener {
                 false, true, true), true);
         voidCombatUntil.put(id, now + COMBAT_MS);
         lastAttackAt.put(id, now);
+        lastVoidHitAt.put(id, now);
+        ascendantSpeedUntil.remove(id);
+        ascendantSpeedUsed.remove(id);
         player.sendMessage(plugin.message("&5Into the Void activated."));
     }
 
@@ -139,6 +146,7 @@ final class ClassAbilityListener implements Listener {
     public void onDamage(EntityDamageEvent event) {
         long now = System.currentTimeMillis();
         Player victim = event.getEntity() instanceof Player p ? p : null;
+        LivingEntity damagedEntity = event.getEntity() instanceof LivingEntity living ? living : null;
         LivingEntity attacker = attacker(event);
         if (victim != null && attacker != null && attacker != victim) {
             if (attacker instanceof Player playerAttacker) {
@@ -175,16 +183,20 @@ final class ClassAbilityListener implements Listener {
             if (victim != null && plugin.isBossAttack(event))
                 combatUntil.put(victim.getUniqueId(), now + COMBAT_MS);
         }
-        if (victim != null && attacker instanceof Player playerAttacker && playerAttacker != victim
-                && activeVoids.contains(victim.getUniqueId())) {
+        // Any living-entity damage keeps Into the Void in combat, including mob attacks.
+        if (victim != null && attacker != null && attacker != victim && activeVoids.contains(victim.getUniqueId())) {
             UUID victimId = victim.getUniqueId();
             lastAttackAt.put(victimId, now);
             voidCombatUntil.put(victimId, now + COMBAT_MS);
         }
-        if (attacker instanceof Player playerAttacker && victim != null && playerAttacker != victim && activeVoids.contains(playerAttacker.getUniqueId())) {
+        // Hitting either a player or a mob resets the timeout and breaks invisibility for 3 seconds.
+        if (event instanceof EntityDamageByEntityEvent && attacker instanceof Player playerAttacker
+                && damagedEntity != null && playerAttacker != damagedEntity
+                && activeVoids.contains(playerAttacker.getUniqueId())) {
             UUID id = playerAttacker.getUniqueId();
             long activationId = voidActivationIds.getOrDefault(id, 0L);
             lastAttackAt.put(id, now);
+            lastVoidHitAt.put(id, now);
             voidCombatUntil.put(id, now + COMBAT_MS);
             playerAttacker.removePotionEffect(PotionEffectType.INVISIBILITY);
             invisibilityReturnAt.put(id, now + 3000L);
@@ -272,6 +284,9 @@ final class ClassAbilityListener implements Listener {
                     voidActivationIds.remove(id);
                     voidCombatUntil.remove(id);
                     lastAttackAt.remove(id);
+                    lastVoidHitAt.remove(id);
+                    ascendantSpeedUntil.remove(id);
+                    ascendantSpeedUsed.remove(id);
                     invisibilityReturnAt.remove(id);
                     voidBonusUsed.remove(id);
                     voidBonusExpiry.remove(id);
@@ -279,6 +294,13 @@ final class ClassAbilityListener implements Listener {
                     previousSpeed.remove(id);
                 }
                 continue;
+            }
+            if (progression.tier(id, "into_the_void") == VanguardProgression.Upgrade.ASCENDANT
+                    && !ascendantSpeedUsed.contains(id)
+                    && now - lastVoidHitAt.getOrDefault(id, now) >= 30_000L) {
+                ascendantSpeedUsed.add(id);
+                ascendantSpeedUntil.put(id, now + 5_000L);
+                player.sendMessage(plugin.message("&5Afterimage activated: Speed IV."));
             }
             refreshVoid(player, false);
             if (voidBonusExpiry.getOrDefault(id, 0L) < now) voidBonusUsed.add(id);
@@ -312,10 +334,13 @@ final class ClassAbilityListener implements Listener {
     }
 
     private void refreshVoid(Player player, boolean restoreInvisibility) {
-        int speed = progression.tier(player.getUniqueId(), "into_the_void") == VanguardProgression.Upgrade.PERFECT
-                || progression.tier(player.getUniqueId(), "into_the_void") == VanguardProgression.Upgrade.ASCENDANT ? 1 : 0;
-        player.addPotionEffect(new PotionEffect(PotionEffectType.SPEED, 40, speed, false, true, true), true);
         UUID id = player.getUniqueId();
+        long now = System.currentTimeMillis();
+        int speed = progression.tier(id, "into_the_void") == VanguardProgression.Upgrade.PERFECT
+                || progression.tier(id, "into_the_void") == VanguardProgression.Upgrade.ASCENDANT ? 1 : 0;
+        if (ascendantSpeedUntil.getOrDefault(id, 0L) > now) speed = 3;
+        else ascendantSpeedUntil.remove(id);
+        player.addPotionEffect(new PotionEffect(PotionEffectType.SPEED, 40, speed, false, true, true), true);
         long returnAt = invisibilityReturnAt.getOrDefault(id, 0L);
         if (restoreInvisibility || returnAt == 0L || returnAt <= System.currentTimeMillis()) {
             player.addPotionEffect(new PotionEffect(PotionEffectType.INVISIBILITY, 40, 0, false, false, true), true);
@@ -330,16 +355,12 @@ final class ClassAbilityListener implements Listener {
     private void finishVoid(Player player, boolean naturalCombatEnd) {
         UUID id = player.getUniqueId();
         long now = System.currentTimeMillis();
-        boolean ascendantEscape = naturalCombatEnd
-                && progression.tier(id, "into_the_void") == VanguardProgression.Upgrade.ASCENDANT;
         activeVoids.remove(id); voidActivationIds.remove(id); combatUntil.remove(id); voidCombatUntil.remove(id);
-        lastAttackAt.remove(id); invisibilityReturnAt.remove(id);
+        lastAttackAt.remove(id); lastVoidHitAt.remove(id); ascendantSpeedUntil.remove(id); ascendantSpeedUsed.remove(id); invisibilityReturnAt.remove(id);
         voidBonusUsed.remove(id); voidBonusExpiry.remove(id);
         player.removePotionEffect(PotionEffectType.INVISIBILITY); player.removePotionEffect(PotionEffectType.SPEED);
         PotionEffect invis = previousInvisibility.remove(id); if (invis != null && invis.getDuration() > 0) player.addPotionEffect(invis);
         PotionEffect speed = previousSpeed.remove(id); if (speed != null && speed.getDuration() > 0) player.addPotionEffect(speed);
-        if (ascendantEscape)
-            player.addPotionEffect(new PotionEffect(PotionEffectType.SPEED, 40, 3, false, true, true), true);
         player.sendMessage(plugin.message("&7Into the Void ended."));
     }
 
