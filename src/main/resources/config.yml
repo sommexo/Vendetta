@@ -93,7 +93,9 @@ vanguard:
   bloodthirst:
     dormant-window-ms: 750
     imperfect-window-ms: 1000
-    cooldown-seconds: 30
+    perfect-window-ms: 1250
+    ascendant-window-ms: 1500
+    cooldown-seconds: 45
   ultimate:
     dormant-cooldown-seconds: 240
     awakened-cooldown-seconds: 480
