@@ -198,9 +198,9 @@ final class VenMarkCommands implements BasicCommand {
             case "predators-instinct" -> new AbilityDetails(
                     "Predator's Instinct — Counter", "Phantom's timed counter and repositioning ability.",
                     "Right-click a sword to arm for 1 second, then crouch as an attack lands.",
-                    "20 seconds after triggering.", "Blindness and movement stun last 5 seconds.",
+                    "45 seconds after triggering.", "Blindness and full movement immobilization last 5 seconds.",
                     "The triggering hit deals zero damage. With a mace anywhere in inventory, Phantom teleports above the attacker; otherwise behind them.",
-                    "One trigger per activation. The stunned attacker may still attack. Ascendant Into the Void adds Afterimage.");
+                    "One trigger per activation. A cooldown save failure prevents the counter from triggering. Ascendant Into the Void adds Afterimage.");
             case "marked-prey" -> new AbilityDetails(
                     "Marked Prey — Passive", "Attackers who hit Phantom receive Glowing.",
                     "Passive; no activation input.", "None.", "6 seconds Dormant, 9 Imperfect, 15 Perfect.",
@@ -274,7 +274,7 @@ final class VenMarkCommands implements BasicCommand {
             }
             case "predators-instinct" -> {
                 title = "Predator's Instinct — Counter";
-                description = "Right-click with a sword to arm for 1 second, then crouch as an attack lands. The counter nullifies that hit, blinds and stuns the attacker for 5 seconds, and has a 20-second cooldown. Ascendant Into the Void grants Afterimage: Speed III for 12 seconds after a successful counter.";
+                description = "Right-click with a sword to arm for 1 second, then crouch as an attack lands. The counter nullifies that hit, blinds and fully immobilizes the attacker for 5 seconds, and has a 45-second cooldown after triggering. If saving the cooldown fails, the counter does not trigger. Ascendant Into the Void grants Afterimage: Speed III for 12 seconds after a successful counter.";
             }
             case "marked-prey" -> {
                 title = "Marked Prey — Passive";
