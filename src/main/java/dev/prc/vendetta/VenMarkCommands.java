@@ -206,9 +206,9 @@ final class VenMarkCommands implements BasicCommand {
             case "into-the-void" -> new AbilityDetails(
                     "Into the Void — Ultimate", "Phantom stealth ultimate.",
                     "Left-click an Ender Pearl; the normal pearl throw is cancelled.", "5 minutes.",
-                    "Until combat ends after " + combatSeconds + " seconds without qualifying PvP damage.",
-                    "Invisibility and Speed I Dormant; Speed II Perfect/Ascendant. Player or mob damage keeps the ultimate active, ending 15 seconds after the last qualifying hit or damage. The first eligible PvP hit within 30 seconds consumes a one-use bonus: 1.1x Dormant, 1.15x Imperfect, 1.3x Perfect, or 1.5x Ascendant when Phantom is below 10 hearts. Attacking a player or mob permanently breaks Invisibility for the remainder of that activation. Ascendant grants Speed IV for 5 seconds after 30 seconds without landing a hit, if combat is still active.",
-                    "Landing a hit or taking damage resets the Ascendant escape timer. Clicking the pearl while active ends the ultimate.");
+                    "5 seconds Dormant, 15 seconds Imperfect, and 25 seconds Perfect/Ascendant.",
+                    "Invisibility and Speed I throughout. The first hit dealt to a living target ends the ultimate and deals 1.1x damage at Imperfect, 1.25x at Perfect, or 1.5x at Ascendant; Dormant has no attack bonus. Taking a hit also ends it immediately. If Ascendant expires without either side interacting through a hit, it grants Speed IV for 15 seconds. Ascendant also adds Afterimage: Speed III for 12 seconds after a successful Predator's Instinct counter.",
+                    "Clicking the Ender Pearl again while active manually ends the ultimate; any damage hit ends it immediately.");
             case "afterimage" -> new AbilityDetails(
                     "Afterimage — Ascendant Bonus", "Ascendant bonus attached to Phantom's Into the Void ultimate.",
                     "Automatically after a successful Predator's Instinct counter.", "Uses Predator's Instinct's activation and cooldown.",
