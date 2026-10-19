@@ -183,8 +183,7 @@ final class ClassAbilityListener implements Listener {
             finishVoid(playerAttacker, false);
         }
         // Taking a hit also ends the ultimate immediately.
-        if (victim != null && activeVoids.contains(victim.getUniqueId())
-                && attacker != null && attacker != victim) {
+        if (victim != null && activeVoids.contains(victim.getUniqueId())) {
             finishVoid(victim, false);
         }
     }
