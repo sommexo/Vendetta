@@ -12,10 +12,11 @@ class VanguardRulesTest {
         assertEquals(1.75, VanguardRules.berserkerMultiplier(VanguardProgression.Upgrade.PERFECT, 9.99));
     }
 
-    @Test void bloodthirstHasOnlySpecifiedWindowValues() {
+    @Test void bloodthirstWindowIncreasesWithEveryTier() {
         assertEquals(750L, VanguardRules.bloodthirstWindowMillis(VanguardProgression.Upgrade.DORMANT));
         assertEquals(1_000L, VanguardRules.bloodthirstWindowMillis(VanguardProgression.Upgrade.IMPERFECT));
-        assertEquals(750L, VanguardRules.bloodthirstWindowMillis(VanguardProgression.Upgrade.PERFECT));
+        assertEquals(1_250L, VanguardRules.bloodthirstWindowMillis(VanguardProgression.Upgrade.PERFECT));
+        assertEquals(1_500L, VanguardRules.bloodthirstWindowMillis(VanguardProgression.Upgrade.ASCENDANT));
     }
 
     @Test void onlyActiveImperfectUltimateBlocksFood() {
