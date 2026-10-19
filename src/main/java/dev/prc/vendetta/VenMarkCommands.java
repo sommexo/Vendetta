@@ -207,7 +207,7 @@ final class VenMarkCommands implements BasicCommand {
                     "Into the Void — Ultimate", "Phantom stealth ultimate.",
                     "Left-click an Ender Pearl; the normal pearl throw is cancelled.", "5 minutes.",
                     "Until combat ends after " + combatSeconds + " seconds without qualifying PvP damage.",
-                    "Invisibility and Speed I Dormant; Speed II Perfect/Ascendant. The first eligible hit within 30 seconds consumes a one-use bonus: 1.1x Dormant, 1.15x Imperfect, 1.3x Perfect, or 1.5x Ascendant when Phantom is below 10 hearts. Attacking breaks Invisibility, returning after 3 seconds. Ascendant also grants Speed IV after more than 30 seconds without a hit.",
+                    "Invisibility and Speed I Dormant; Speed II Perfect/Ascendant. Player or mob damage keeps the ultimate active, ending 15 seconds after the last qualifying hit or damage. The first eligible PvP hit within 30 seconds consumes a one-use bonus: 1.1x Dormant, 1.15x Imperfect, 1.3x Perfect, or 1.5x Ascendant when Phantom is below 10 hearts. Attacking a player or mob breaks Invisibility, returning after 3 seconds. Ascendant grants Speed IV for 5 seconds after 30 seconds without landing a hit, if combat is still active.",
                     "Landing a hit or taking damage resets the Ascendant escape timer. Clicking the pearl while active ends the ultimate.");
             case "afterimage" -> new AbilityDetails(
                     "Afterimage — Ascendant Bonus", "Ascendant bonus attached to Phantom's Into the Void ultimate.",
