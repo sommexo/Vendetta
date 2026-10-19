@@ -9,10 +9,17 @@ class PhantomRulesTest {
         assertEquals(15_000L, PhantomRules.INTO_THE_VOID_INACTIVITY_MILLIS);
     }
 
+    @Test void intoTheVoidDurationScalesByTier() {
+        assertEquals(5_000L, PhantomRules.intoTheVoidDurationMillis(VanguardProgression.Upgrade.DORMANT));
+        assertEquals(15_000L, PhantomRules.intoTheVoidDurationMillis(VanguardProgression.Upgrade.IMPERFECT));
+        assertEquals(25_000L, PhantomRules.intoTheVoidDurationMillis(VanguardProgression.Upgrade.PERFECT));
+        assertEquals(25_000L, PhantomRules.intoTheVoidDurationMillis(VanguardProgression.Upgrade.ASCENDANT));
+    }
+
     @Test void intoTheVoidUsesTheConfiguredTierMultiplier() {
-        assertEquals(1.10, PhantomRules.intoTheVoidNextHitMultiplier(VanguardProgression.Upgrade.DORMANT));
-        assertEquals(1.15, PhantomRules.intoTheVoidNextHitMultiplier(VanguardProgression.Upgrade.IMPERFECT));
-        assertEquals(1.30, PhantomRules.intoTheVoidNextHitMultiplier(VanguardProgression.Upgrade.PERFECT));
+        assertEquals(1.0, PhantomRules.intoTheVoidNextHitMultiplier(VanguardProgression.Upgrade.DORMANT));
+        assertEquals(1.10, PhantomRules.intoTheVoidNextHitMultiplier(VanguardProgression.Upgrade.IMPERFECT));
+        assertEquals(1.25, PhantomRules.intoTheVoidNextHitMultiplier(VanguardProgression.Upgrade.PERFECT));
         assertEquals(1.50, PhantomRules.intoTheVoidNextHitMultiplier(VanguardProgression.Upgrade.ASCENDANT));
     }
 }
