@@ -54,8 +54,8 @@ final class VanguardAbilityListener implements Listener {
         if (counterWindows.getOrDefault(player.getUniqueId(), 0L) > now) return;
         long deadline = now + counterWindowMillis(data.bloodthirst);
         long oldCooldown = data.bloodthirstReadyAt;
-        data.bloodthirstReadyAt = deadline
-                + plugin.getConfig().getLong("vanguard.bloodthirst.cooldown-seconds", 30) * 1000L;
+        data.bloodthirstReadyAt = now
+                + plugin.getConfig().getLong("vanguard.bloodthirst.cooldown-seconds", 45) * 1000L;
         try { progress.save(player.getUniqueId()); }
         catch (RuntimeException ex) {
             data.bloodthirstReadyAt = oldCooldown;
@@ -238,7 +238,7 @@ final class VanguardAbilityListener implements Listener {
     private void triggerBloodthirst(Player defender) {
         VanguardProgression.PlayerData data = progress.get(defender.getUniqueId());
         data.bloodthirstReadyAt = System.currentTimeMillis()
-                + plugin.getConfig().getLong("vanguard.bloodthirst.cooldown-seconds", 30) * 1000L;
+                + plugin.getConfig().getLong("vanguard.bloodthirst.cooldown-seconds", 45) * 1000L;
         progress.save(defender.getUniqueId());
         plugin.getServer().getScheduler().runTask(plugin, () -> {
             if (defender.isOnline() && !defender.isDead()) {
@@ -393,6 +393,11 @@ final class VanguardAbilityListener implements Listener {
         return item != null && (item.getType().name().endsWith("_SWORD") || item.getType().name().endsWith("_AXE"));
     }
     private long counterWindowMillis(VanguardProgression.Upgrade upgrade) {
-        return VanguardRules.bloodthirstWindowMillis(upgrade);
+        return switch (upgrade) {
+            case DORMANT -> plugin.getConfig().getLong("vanguard.bloodthirst.dormant-window-ms", 750);
+            case IMPERFECT -> plugin.getConfig().getLong("vanguard.bloodthirst.imperfect-window-ms", 1000);
+            case PERFECT -> plugin.getConfig().getLong("vanguard.bloodthirst.perfect-window-ms", 1250);
+            case ASCENDANT -> plugin.getConfig().getLong("vanguard.bloodthirst.ascendant-window-ms", 1500);
+        };
     }
 }
