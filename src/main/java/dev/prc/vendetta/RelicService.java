@@ -330,16 +330,21 @@ final class RelicService implements Listener {
         if (!(event.getRightClicked() instanceof Villager villager) || villager.getProfession() != Villager.Profession.CLERIC
                 || !villager.getPersistentDataContainer().has(merchantKey, PersistentDataType.BYTE)) return;
         event.setCancelled(true);
+        openRelicShop(event.getPlayer(), villager);
+    }
+
+    private void openRelicShop(Player player, Villager villager) {
         Inventory inventory = Bukkit.createInventory(new RelicShopHolder(), 27, ChatColor.DARK_PURPLE + "Cleric Relics");
         RelicShopHolder holder = (RelicShopHolder) inventory.getHolder();
         holder.inventory = inventory;
-        String[] classes = {"vanguard", "warden", "phantom"};
-        int[] slots = {10, 11, 12, 14, 15, 16, 19, 20, 21};
+        holder.merchant = villager;
+        holder.villagerLevel = villager.getVillagerLevel();
+        int[] slots = {11, 13, 15};
         int offerIndex = 0;
-        for (int tier = 1; tier <= 3; tier++) for (String relicClass : classes) {
+        for (RelicMerchantRules.Offer offer : RelicMerchantRules.offers(holder.villagerLevel)) {
+            String relicClass = offer.relicClass();
+            int tier = offer.relicTier();
             int slot = slots[offerIndex++];
-            // The designated merchant always exposes a stable 3x3 class/tier matrix.
-            // In particular, every Master cleric has all three Ascendant class offers.
             String ability = merchantAbility(relicClass, tier);
             long price = tier == 1 ? 1000 : 2000;
             ItemStack item = createRelic(relicClass, ability, tier);
@@ -354,7 +359,7 @@ final class RelicService implements Listener {
             item.setItemMeta(meta);
             inventory.setItem(slot, item);
         }
-        event.getPlayer().openInventory(inventory);
+        player.openInventory(inventory);
     }
 
     private String merchantAbility(String relicClass, int tier) {
@@ -367,6 +372,20 @@ final class RelicService implements Listener {
         if (!(event.getView().getTopInventory().getHolder() instanceof RelicShopHolder)) return;
         event.setCancelled(true);
         if (!(event.getWhoClicked() instanceof Player player) || event.getRawSlot() >= event.getView().getTopInventory().getSize()) return;
+        RelicShopHolder holder = (RelicShopHolder) event.getView().getTopInventory().getHolder();
+        Villager merchant = holder.merchant;
+        if (merchant == null || !merchant.isValid() || merchant.getProfession() != Villager.Profession.CLERIC
+                || !merchant.getPersistentDataContainer().has(merchantKey, PersistentDataType.BYTE)) {
+            player.closeInventory();
+            player.sendMessage(plugin.message("&cThis relic merchant is no longer available."));
+            return;
+        }
+        if (merchant.getVillagerLevel() != holder.villagerLevel) {
+            player.closeInventory();
+            player.sendMessage(plugin.message("&eThe cleric's level changed; its relic offers have been refreshed."));
+            openRelicShop(player, merchant);
+            return;
+        }
         if (!purchaseLocks.add(player.getUniqueId())) return;
         try {
         ItemStack item = event.getCurrentItem();
@@ -563,6 +582,8 @@ final class RelicService implements Listener {
     }
     private static final class RelicShopHolder implements InventoryHolder {
         Inventory inventory;
+        Villager merchant;
+        int villagerLevel;
         @Override public Inventory getInventory() { return inventory; }
     }
 }
