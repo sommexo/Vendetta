@@ -173,9 +173,11 @@ final class VenMarkCommands implements BasicCommand {
                     "Bloodthirst — Counter",
                     "A timed Vanguard counter that heals Vanguard to full after a successful trigger.",
                     "Right-click a sword, then crouch when a qualifying attack lands.",
-                    plugin.getConfig().getLong("vanguard.bloodthirst.cooldown-seconds", 30) + " seconds; a failed counter also consumes it.",
+                    plugin.getConfig().getLong("vanguard.bloodthirst.cooldown-seconds", 45) + " seconds from arming; a successful counter resets it.",
                     plugin.getConfig().getLong("vanguard.bloodthirst.dormant-window-ms", 750) / 1000.0 + " seconds Dormant; "
-                            + plugin.getConfig().getLong("vanguard.bloodthirst.imperfect-window-ms", 1000) / 1000.0 + " seconds Imperfect.",
+                            + plugin.getConfig().getLong("vanguard.bloodthirst.imperfect-window-ms", 1000) / 1000.0 + " seconds Imperfect; "
+                            + plugin.getConfig().getLong("vanguard.bloodthirst.perfect-window-ms", 1250) / 1000.0 + " seconds Perfect; "
+                            + plugin.getConfig().getLong("vanguard.bloodthirst.ascendant-window-ms", 1500) / 1000.0 + " seconds Ascendant."
                     "The triggering hit still deals damage; a successful counter restores full health.",
                     "Requires a sword, crouching at the correct moment, and a qualifying direct attack.");
             case "ultimate" -> new AbilityDetails(
@@ -259,9 +261,12 @@ final class VenMarkCommands implements BasicCommand {
                 title = "Bloodthirst — Counter";
                 description = "Right-click with a sword to arm, then crouch when hit. Dormant window: "
                         + plugin.getConfig().getLong("vanguard.bloodthirst.dormant-window-ms", 750) / 1000.0
-                        + "s; Imperfect window: " + plugin.getConfig().getLong("vanguard.bloodthirst.imperfect-window-ms", 1000) / 1000.0
-                        + "s. The hit still deals damage; a successful counter heals to full. A missed window starts a full cooldown of "
-                        + plugin.getConfig().getLong("vanguard.bloodthirst.cooldown-seconds", 30) + "s.";
+                        + "s; Imperfect: " + plugin.getConfig().getLong("vanguard.bloodthirst.imperfect-window-ms", 1000) / 1000.0
+                        + "s; Perfect: " + plugin.getConfig().getLong("vanguard.bloodthirst.perfect-window-ms", 1250) / 1000.0
+                        + "s; Ascendant: " + plugin.getConfig().getLong("vanguard.bloodthirst.ascendant-window-ms", 1500) / 1000.0
+                        + "s. The hit still deals damage; a successful counter heals to full. Cooldown: "
+                        + plugin.getConfig().getLong("vanguard.bloodthirst.cooldown-seconds", 45)
+                        + "s from arming, reset on a successful counter.";
             }
             case "into-the-void" -> {
                 title = "Into the Void â€” Ultimate";
