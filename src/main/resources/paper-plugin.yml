@@ -4,8 +4,6 @@ prefix: Vendetta
 version: '${release.name}'
 
 main: dev.prc.vendetta.mark
-bootstrapper: dev.prc.vendetta.markBootstrap
-loader: dev.prc.vendetta.markLoader
 api-version: '26.3'
 load: STARTUP
 

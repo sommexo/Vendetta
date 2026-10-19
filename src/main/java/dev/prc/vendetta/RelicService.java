@@ -319,10 +319,9 @@ final class RelicService implements Listener {
     @EventHandler
     public void onNaturalClericSpawn(CreatureSpawnEvent event) {
         if (!(event.getEntity() instanceof Villager villager) || event.getSpawnReason() != CreatureSpawnEvent.SpawnReason.NATURAL) return;
-        Bukkit.getScheduler().runTaskLater(plugin, () -> {
-            if (villager.isValid() && villager.getProfession() == Villager.Profession.CLERIC)
-                villager.getPersistentDataContainer().set(merchantKey, PersistentDataType.BYTE, (byte) 1);
-        }, 1L);
+        // A natural villager normally receives its profession later, after a job-site interaction.
+        // Mark the natural villager at spawn so the marker survives until it becomes a cleric.
+        villager.getPersistentDataContainer().set(merchantKey, PersistentDataType.BYTE, (byte) 1);
     }
 
     @EventHandler(ignoreCancelled = true)

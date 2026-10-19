@@ -5,6 +5,7 @@ import org.bukkit.Material;
 import org.bukkit.attribute.Attribute;
 import org.bukkit.entity.Entity;
 import org.bukkit.entity.LivingEntity;
+import org.bukkit.entity.Monster;
 import org.bukkit.entity.Player;
 import org.bukkit.entity.Projectile;
 import org.bukkit.event.EventHandler;
@@ -33,7 +34,7 @@ import java.util.UUID;
 
 /** Server-side Phantom abilities and Warden regular abilities. */
 final class ClassAbilityListener implements Listener {
-    private static final long COMBAT_MS = 15_000L;
+    private static final long COMBAT_MS = PhantomRules.INTO_THE_VOID_INACTIVITY_MILLIS;
     private final mark plugin;
     private final ClassProgression progression;
     private final Map<UUID, Long> predatorArmedUntil = new HashMap<>();
@@ -43,10 +44,9 @@ final class ClassAbilityListener implements Listener {
     private final Map<UUID, Long> recentAttackerAt = new HashMap<>();
     private final Map<UUID, Long> lastAttackAt = new HashMap<>();
     private final Map<UUID, Long> invisibilityReturnAt = new HashMap<>();
-    private final Map<UUID, Long> lastPlayerCombatAt = new HashMap<>();
-    private final Map<UUID, Long> voidEscapeDueAt = new HashMap<>();
-    private final Map<UUID, Long> voidEscapeBaseline = new HashMap<>();
     private final Set<UUID> activeVoids = new HashSet<>();
+    private final Map<UUID, Long> voidActivationIds = new HashMap<>();
+    private long nextVoidActivationId;
     private final Map<UUID, PotionEffect> previousInvisibility = new HashMap<>();
     private final Map<UUID, PotionEffect> previousSpeed = new HashMap<>();
     private final Map<UUID, Long> stunUntil = new HashMap<>();
@@ -117,11 +117,9 @@ final class ClassAbilityListener implements Listener {
         try { progression.save(id); }
         catch (RuntimeException ex) { progression.cooldown(id, "into_the_void", ready); return; }
         activeVoids.add(id);
+        voidActivationIds.put(id, ++nextVoidActivationId);
         voidBonusUsed.remove(id);
         voidBonusExpiry.put(id, now + 30_000L);
-        voidEscapeDueAt.remove(id);
-        voidEscapeBaseline.remove(id);
-        lastPlayerCombatAt.put(id, now);
         PotionEffect invis = player.getPotionEffect(PotionEffectType.INVISIBILITY);
         PotionEffect speed = player.getPotionEffect(PotionEffectType.SPEED);
         if (invis != null) previousInvisibility.put(id, invis);
@@ -139,36 +137,34 @@ final class ClassAbilityListener implements Listener {
     public void onDamage(EntityDamageEvent event) {
         long now = System.currentTimeMillis();
         Player victim = event.getEntity() instanceof Player p ? p : null;
-        Player attacker = attacker(event);
+        LivingEntity attacker = attacker(event);
         if (victim != null && attacker != null && attacker != victim) {
-            lastPlayerCombatAt.put(victim.getUniqueId(), now);
-            lastPlayerCombatAt.put(attacker.getUniqueId(), now);
-            voidEscapeDueAt.remove(victim.getUniqueId());
-            voidEscapeDueAt.remove(attacker.getUniqueId());
-            voidEscapeBaseline.remove(victim.getUniqueId());
-            voidEscapeBaseline.remove(attacker.getUniqueId());
-            if (event instanceof EntityDamageByEntityEvent) {
-                recentAttacker.put(victim.getUniqueId(), attacker.getUniqueId());
-                recentAttackerAt.put(victim.getUniqueId(), now);
-            }
-            combatUntil.put(victim.getUniqueId(), now + COMBAT_MS);
-            combatUntil.put(attacker.getUniqueId(), now + COMBAT_MS);
-            if ("phantom".equals(plugin.selectedClass(victim.getUniqueId()))) {
-                int seconds = switch (progression.tier(victim.getUniqueId(), "marked_prey")) {
-                    case DORMANT -> 6; case IMPERFECT -> 9; case PERFECT -> 15; case ASCENDANT -> 15;
-                };
-                attacker.addPotionEffect(new PotionEffect(PotionEffectType.GLOWING, seconds * 20, 0, false, true, true));
-                if (event instanceof EntityDamageByEntityEvent && victim.isSneaking()
-                        && predatorArmedUntil.getOrDefault(victim.getUniqueId(), 0L) >= now) {
-                    predatorArmedUntil.remove(victim.getUniqueId());
-                    predatorCooldown.put(victim.getUniqueId(), now + 20_000L);
-                    progression.cooldown(victim.getUniqueId(), "predators_instinct", now + 20_000L);
-                    try { progression.save(victim.getUniqueId()); }
-                    catch (RuntimeException ex) { plugin.getLogger().severe("Could not save Predator's Instinct cooldown: " + ex.getMessage()); }
-                    event.setDamage(0);
-                    event.setCancelled(true);
-                    predatorCounter(victim, attacker);
+            if (attacker instanceof Player playerAttacker) {
+                if (event instanceof EntityDamageByEntityEvent) {
+                    recentAttacker.put(victim.getUniqueId(), playerAttacker.getUniqueId());
+                    recentAttackerAt.put(victim.getUniqueId(), now);
                 }
+                combatUntil.put(victim.getUniqueId(), now + COMBAT_MS);
+                combatUntil.put(playerAttacker.getUniqueId(), now + COMBAT_MS);
+                if ("phantom".equals(plugin.selectedClass(victim.getUniqueId()))) {
+                    int seconds = switch (progression.tier(victim.getUniqueId(), "marked_prey")) {
+                        case DORMANT -> 6; case IMPERFECT -> 9; case PERFECT -> 15; case ASCENDANT -> 15;
+                    };
+                    playerAttacker.addPotionEffect(new PotionEffect(PotionEffectType.GLOWING, seconds * 20, 0, false, true, true));
+                }
+            }
+            if ("phantom".equals(plugin.selectedClass(victim.getUniqueId()))
+                    && event instanceof EntityDamageByEntityEvent && victim.isSneaking()
+                    && predatorArmedUntil.getOrDefault(victim.getUniqueId(), 0L) >= now
+                    && isEligibleCounterAttacker(attacker)) {
+                predatorArmedUntil.remove(victim.getUniqueId());
+                predatorCooldown.put(victim.getUniqueId(), now + 20_000L);
+                progression.cooldown(victim.getUniqueId(), "predators_instinct", now + 20_000L);
+                try { progression.save(victim.getUniqueId()); }
+                catch (RuntimeException ex) { plugin.getLogger().severe("Could not save Predator's Instinct cooldown: " + ex.getMessage()); }
+                event.setDamage(0);
+                event.setCancelled(true);
+                predatorCounter(victim, attacker);
             }
         }
         if (eligibleCombatDamage(event)) {
@@ -181,22 +177,25 @@ final class ClassAbilityListener implements Listener {
             lastAttackAt.put(victim.getUniqueId(), now);
             combatUntil.put(victim.getUniqueId(), now + COMBAT_MS);
         }
-        if (attacker != null && victim != null && attacker != victim && activeVoids.contains(attacker.getUniqueId())) {
-            lastAttackAt.put(attacker.getUniqueId(), now);
-            combatUntil.put(attacker.getUniqueId(), now + COMBAT_MS);
-            attacker.removePotionEffect(PotionEffectType.INVISIBILITY);
-            invisibilityReturnAt.put(attacker.getUniqueId(), now + 3000L);
+        if (attacker instanceof Player playerAttacker && victim != null && playerAttacker != victim && activeVoids.contains(playerAttacker.getUniqueId())) {
+            UUID id = playerAttacker.getUniqueId();
+            long activationId = voidActivationIds.getOrDefault(id, 0L);
+            lastAttackAt.put(id, now);
+            combatUntil.put(id, now + COMBAT_MS);
+            playerAttacker.removePotionEffect(PotionEffectType.INVISIBILITY);
+            invisibilityReturnAt.put(id, now + 3000L);
             plugin.getServer().getScheduler().runTaskLater(plugin, () -> {
-                if (activeVoids.contains(attacker.getUniqueId()) && combatUntil.getOrDefault(attacker.getUniqueId(), 0L) > System.currentTimeMillis())
-                    refreshVoid(attacker, true);
+                if (activeVoids.contains(id) && voidActivationIds.getOrDefault(id, -1L) == activationId
+                        && combatUntil.getOrDefault(id, 0L) > System.currentTimeMillis())
+                    refreshVoid(playerAttacker, true);
             }, 60L);
         }
-        if (attacker != null && victim != null && attacker != victim && activeVoids.contains(attacker.getUniqueId())) {
-            VanguardProgression.Upgrade tier = progression.tier(attacker.getUniqueId(), "into_the_void");
-            UUID id = attacker.getUniqueId();
+        if (attacker instanceof Player playerAttacker && victim != null && playerAttacker != victim && activeVoids.contains(playerAttacker.getUniqueId())) {
+            VanguardProgression.Upgrade tier = progression.tier(playerAttacker.getUniqueId(), "into_the_void");
+            UUID id = playerAttacker.getUniqueId();
             if (event instanceof EntityDamageByEntityEvent && !progressionUsedVoidBonus(id)) {
                 double multiplier = PhantomRules.intoTheVoidNextHitMultiplier(tier);
-                if (attacker.getHealth() < 20.0) event.setDamage(event.getDamage() * multiplier);
+                if (playerAttacker.getHealth() < 20.0) event.setDamage(event.getDamage() * multiplier);
                 markVoidBonusUsed(id);
             }
         }
@@ -207,12 +206,14 @@ final class ClassAbilityListener implements Listener {
     private boolean progressionUsedVoidBonus(UUID id) { return voidBonusUsed.contains(id) || voidBonusExpiry.getOrDefault(id, 0L) < System.currentTimeMillis(); }
     private void markVoidBonusUsed(UUID id) { voidBonusUsed.add(id); }
 
-    private void predatorCounter(Player phantom, Player attacker) {
+    private void predatorCounter(Player phantom, LivingEntity attacker) {
         attacker.addPotionEffect(new PotionEffect(PotionEffectType.BLINDNESS, 100, 0, false, true, true));
-        UUID id = attacker.getUniqueId();
-        if (!previousWalkSpeed.containsKey(id)) previousWalkSpeed.put(id, attacker.getWalkSpeed());
-        attacker.setWalkSpeed(0f);
-        stunUntil.put(id, System.currentTimeMillis() + 5000L);
+        if (attacker instanceof Player playerAttacker) {
+            UUID id = playerAttacker.getUniqueId();
+            if (!previousWalkSpeed.containsKey(id)) previousWalkSpeed.put(id, playerAttacker.getWalkSpeed());
+            playerAttacker.setWalkSpeed(0f);
+            stunUntil.put(id, System.currentTimeMillis() + 5000L);
+        }
         boolean mace = java.util.Arrays.stream(phantom.getInventory().getContents())
                 .anyMatch(item -> item != null && item.getType() == Material.MACE);
         ItemStack cursor = phantom.getItemOnCursor();
@@ -228,13 +229,13 @@ final class ClassAbilityListener implements Listener {
             phantom.addPotionEffect(new PotionEffect(PotionEffectType.SPEED, 240, 2, false, true, true));
     }
 
-    private Location safeAbove(Player attacker) {
+    private Location safeAbove(LivingEntity attacker) {
         Location base = attacker.getLocation().clone().add(0, 2.5, 0);
         if (base.getY() >= base.getWorld().getMaxHeight() - 1) return null;
         return base.getBlock().isPassable() && base.clone().add(0, 1, 0).getBlock().isPassable() ? base : null;
     }
 
-    private Location safeBehind(Player attacker) {
+    private Location safeBehind(LivingEntity attacker) {
         Vector direction = attacker.getLocation().getDirection().setY(0).normalize();
         if (direction.lengthSquared() < 0.01) direction = new Vector(0, 0, 1);
         Location base = attacker.getLocation().clone().subtract(direction.multiply(1.25));
@@ -266,21 +267,6 @@ final class ClassAbilityListener implements Listener {
             refreshVoid(player, false);
             if (voidBonusExpiry.getOrDefault(id, 0L) < now) voidBonusUsed.add(id);
         }
-        for (UUID id : Set.copyOf(voidEscapeDueAt.keySet())) {
-            Player player = plugin.getServer().getPlayer(id);
-            if (player == null) {
-                clearVoidEscape(id);
-                continue;
-            }
-            if (lastPlayerCombatAt.getOrDefault(id, 0L) != voidEscapeBaseline.getOrDefault(id, -1L)) {
-                clearVoidEscape(id);
-                continue;
-            }
-            if (voidEscapeDueAt.getOrDefault(id, Long.MAX_VALUE) <= now) {
-                player.addPotionEffect(new PotionEffect(PotionEffectType.SPEED, 40, 3, false, true, true), true);
-                clearVoidEscape(id);
-            }
-        }
     }
 
     @EventHandler(priority = EventPriority.HIGHEST, ignoreCancelled = true)
@@ -305,7 +291,6 @@ final class ClassAbilityListener implements Listener {
     void classChanged(Player player) {
         UUID id = player.getUniqueId();
         predatorArmedUntil.remove(id);
-        clearVoidEscape(id);
         if (activeVoids.contains(id)) finishVoid(player);
         applyWardenResistance(player);
     }
@@ -331,32 +316,23 @@ final class ClassAbilityListener implements Listener {
         long now = System.currentTimeMillis();
         boolean ascendantEscape = naturalCombatEnd
                 && progression.tier(id, "into_the_void") == VanguardProgression.Upgrade.ASCENDANT;
-        long lastPlayerCombat = lastPlayerCombatAt.getOrDefault(id, now);
-        activeVoids.remove(id); combatUntil.remove(id); lastAttackAt.remove(id); invisibilityReturnAt.remove(id);
+        activeVoids.remove(id); voidActivationIds.remove(id); combatUntil.remove(id); lastAttackAt.remove(id); invisibilityReturnAt.remove(id);
+        voidBonusUsed.remove(id); voidBonusExpiry.remove(id);
         player.removePotionEffect(PotionEffectType.INVISIBILITY); player.removePotionEffect(PotionEffectType.SPEED);
         PotionEffect invis = previousInvisibility.remove(id); if (invis != null && invis.getDuration() > 0) player.addPotionEffect(invis);
         PotionEffect speed = previousSpeed.remove(id); if (speed != null && speed.getDuration() > 0) player.addPotionEffect(speed);
-        if (ascendantEscape) {
-            voidEscapeDueAt.put(id, now + 30_000L);
-            voidEscapeBaseline.put(id, lastPlayerCombat);
-        } else clearVoidEscape(id);
+        if (ascendantEscape)
+            player.addPotionEffect(new PotionEffect(PotionEffectType.SPEED, 40, 3, false, true, true), true);
         player.sendMessage(plugin.message("&7Into the Void ended."));
     }
 
-    private void clearVoidEscape(UUID id) {
-        voidEscapeDueAt.remove(id);
-        voidEscapeBaseline.remove(id);
-    }
-
-    private Player attacker(EntityDamageEvent event) {
+    private LivingEntity attacker(EntityDamageEvent event) {
         if (event instanceof EntityDamageByEntityEvent byEntity) {
             Entity source = byEntity.getDamager();
-            if (source instanceof Player player) return player;
-            if (source instanceof Projectile projectile && projectile.getShooter() instanceof Player player) return player;
-            if (source instanceof org.bukkit.entity.AreaEffectCloud cloud && cloud.getSource() instanceof Player player) return player;
-            if (source instanceof org.bukkit.entity.TNTPrimed tnt && tnt.getSource() instanceof Player player) return player;
-            if (source instanceof LivingEntity living && living.getLastDamageCause() instanceof EntityDamageByEntityEvent nested
-                    && nested.getDamager() instanceof Player player) return player;
+            if (source instanceof LivingEntity living) return living;
+            if (source instanceof Projectile projectile && projectile.getShooter() instanceof LivingEntity living) return living;
+            if (source instanceof org.bukkit.entity.AreaEffectCloud cloud && cloud.getSource() instanceof LivingEntity living) return living;
+            if (source instanceof org.bukkit.entity.TNTPrimed tnt && tnt.getSource() instanceof LivingEntity living) return living;
         }
         if (event.getEntity() instanceof Player victim && System.currentTimeMillis()
                 - recentAttackerAt.getOrDefault(victim.getUniqueId(), 0L) <= COMBAT_MS) {
@@ -375,21 +351,22 @@ final class ClassAbilityListener implements Listener {
         };
     }
 
+    private boolean isEligibleCounterAttacker(LivingEntity attacker) {
+        return attacker instanceof Player || attacker instanceof Monster;
+    }
+
     @EventHandler public void onJoin(PlayerJoinEvent event) { applyWardenResistance(event.getPlayer()); }
     @EventHandler public void onWorldChange(PlayerChangedWorldEvent event) {
         UUID id = event.getPlayer().getUniqueId();
         recentAttacker.remove(id); recentAttackerAt.remove(id);
-        clearVoidEscape(id);
         if (activeVoids.contains(id)) finishVoid(event.getPlayer());
     }
     @EventHandler public void onQuit(PlayerQuitEvent event) {
         UUID id = event.getPlayer().getUniqueId(); recentAttacker.remove(id); recentAttackerAt.remove(id);
-        clearVoidEscape(id);
         if (activeVoids.contains(id)) finishVoid(event.getPlayer());
     }
     @EventHandler public void onDeath(PlayerDeathEvent event) {
         UUID id = event.getEntity().getUniqueId(); recentAttacker.remove(id); recentAttackerAt.remove(id);
-        clearVoidEscape(id);
         if (activeVoids.contains(id)) finishVoid(event.getEntity());
     }
 

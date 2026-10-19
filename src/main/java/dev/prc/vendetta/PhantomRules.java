@@ -1,6 +1,8 @@
 package dev.prc.vendetta;
 
 final class PhantomRules {
+    static final long INTO_THE_VOID_INACTIVITY_MILLIS = 15_000L;
+
     private PhantomRules() { }
 
     static double intoTheVoidNextHitMultiplier(VanguardProgression.Upgrade tier) {

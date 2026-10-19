@@ -371,6 +371,7 @@ final class VanguardAbilityListener implements Listener {
         if (event instanceof EntityDamageByEntityEvent byEntity) {
             Entity damager = byEntity.getDamager();
             if (damager instanceof Player player) return player;
+            if (damager instanceof LivingEntity living) return living;
             if (damager instanceof Projectile projectile && projectile.getShooter() instanceof LivingEntity living) return living;
             if (damager instanceof org.bukkit.entity.AreaEffectCloud cloud && cloud.getSource() instanceof LivingEntity living) return living;
             if (damager instanceof org.bukkit.entity.TNTPrimed tnt && tnt.getSource() instanceof LivingEntity living) return living;
