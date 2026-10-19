@@ -43,6 +43,9 @@ final class ClassAbilityListener implements Listener {
     private final Map<UUID, Long> recentAttackerAt = new HashMap<>();
     private final Map<UUID, Long> lastAttackAt = new HashMap<>();
     private final Map<UUID, Long> invisibilityReturnAt = new HashMap<>();
+    private final Map<UUID, Long> lastPlayerCombatAt = new HashMap<>();
+    private final Map<UUID, Long> voidEscapeDueAt = new HashMap<>();
+    private final Map<UUID, Long> voidEscapeBaseline = new HashMap<>();
     private final Set<UUID> activeVoids = new HashSet<>();
     private final Map<UUID, PotionEffect> previousInvisibility = new HashMap<>();
     private final Map<UUID, PotionEffect> previousSpeed = new HashMap<>();
@@ -116,6 +119,9 @@ final class ClassAbilityListener implements Listener {
         activeVoids.add(id);
         voidBonusUsed.remove(id);
         voidBonusExpiry.put(id, now + 30_000L);
+        voidEscapeDueAt.remove(id);
+        voidEscapeBaseline.remove(id);
+        lastPlayerCombatAt.put(id, now);
         PotionEffect invis = player.getPotionEffect(PotionEffectType.INVISIBILITY);
         PotionEffect speed = player.getPotionEffect(PotionEffectType.SPEED);
         if (invis != null) previousInvisibility.put(id, invis);
@@ -135,6 +141,12 @@ final class ClassAbilityListener implements Listener {
         Player victim = event.getEntity() instanceof Player p ? p : null;
         Player attacker = attacker(event);
         if (victim != null && attacker != null && attacker != victim) {
+            lastPlayerCombatAt.put(victim.getUniqueId(), now);
+            lastPlayerCombatAt.put(attacker.getUniqueId(), now);
+            voidEscapeDueAt.remove(victim.getUniqueId());
+            voidEscapeDueAt.remove(attacker.getUniqueId());
+            voidEscapeBaseline.remove(victim.getUniqueId());
+            voidEscapeBaseline.remove(attacker.getUniqueId());
             if (event instanceof EntityDamageByEntityEvent) {
                 recentAttacker.put(victim.getUniqueId(), attacker.getUniqueId());
                 recentAttackerAt.put(victim.getUniqueId(), now);
@@ -165,7 +177,7 @@ final class ClassAbilityListener implements Listener {
             if (victim != null && plugin.isBossAttack(event))
                 combatUntil.put(victim.getUniqueId(), now + COMBAT_MS);
         }
-        if (victim != null && activeVoids.contains(victim.getUniqueId())) {
+        if (victim != null && attacker != null && activeVoids.contains(victim.getUniqueId())) {
             lastAttackAt.put(victim.getUniqueId(), now);
             combatUntil.put(victim.getUniqueId(), now + COMBAT_MS);
         }
@@ -179,16 +191,12 @@ final class ClassAbilityListener implements Listener {
                     refreshVoid(attacker, true);
             }, 60L);
         }
-        if (attacker != null && plugin.isBossMob(event.getEntity()) && activeVoids.contains(attacker.getUniqueId())) {
-            lastAttackAt.put(attacker.getUniqueId(), now);
-            combatUntil.put(attacker.getUniqueId(), now + COMBAT_MS);
-        }
         if (attacker != null && victim != null && attacker != victim && activeVoids.contains(attacker.getUniqueId())) {
             VanguardProgression.Upgrade tier = progression.tier(attacker.getUniqueId(), "into_the_void");
             UUID id = attacker.getUniqueId();
-            if (tier == VanguardProgression.Upgrade.ASCENDANT && event instanceof EntityDamageByEntityEvent
-                    && !progressionUsedVoidBonus(id)) {
-                if (attacker.getHealth() < 20.0) event.setDamage(event.getDamage() * 1.5);
+            if (event instanceof EntityDamageByEntityEvent && !progressionUsedVoidBonus(id)) {
+                double multiplier = PhantomRules.intoTheVoidNextHitMultiplier(tier);
+                if (attacker.getHealth() < 20.0) event.setDamage(event.getDamage() * multiplier);
                 markVoidBonusUsed(id);
             }
         }
@@ -252,14 +260,26 @@ final class ClassAbilityListener implements Listener {
         for (UUID id : Set.copyOf(activeVoids)) {
             Player player = plugin.getServer().getPlayer(id);
             if (player == null || combatUntil.getOrDefault(id, 0L) <= now) {
-                if (player != null) finishVoid(player); else activeVoids.remove(id);
+                if (player != null) finishVoid(player, true); else activeVoids.remove(id);
                 continue;
             }
             refreshVoid(player, false);
-            if (progression.tier(id, "into_the_void") == VanguardProgression.Upgrade.ASCENDANT
-                    && now - lastAttackAt.getOrDefault(id, now) > 30_000L)
-                player.addPotionEffect(new PotionEffect(PotionEffectType.SPEED, 40, 3, false, true, true), true);
             if (voidBonusExpiry.getOrDefault(id, 0L) < now) voidBonusUsed.add(id);
+        }
+        for (UUID id : Set.copyOf(voidEscapeDueAt.keySet())) {
+            Player player = plugin.getServer().getPlayer(id);
+            if (player == null) {
+                clearVoidEscape(id);
+                continue;
+            }
+            if (lastPlayerCombatAt.getOrDefault(id, 0L) != voidEscapeBaseline.getOrDefault(id, -1L)) {
+                clearVoidEscape(id);
+                continue;
+            }
+            if (voidEscapeDueAt.getOrDefault(id, Long.MAX_VALUE) <= now) {
+                player.addPotionEffect(new PotionEffect(PotionEffectType.SPEED, 40, 3, false, true, true), true);
+                clearVoidEscape(id);
+            }
         }
     }
 
@@ -285,6 +305,7 @@ final class ClassAbilityListener implements Listener {
     void classChanged(Player player) {
         UUID id = player.getUniqueId();
         predatorArmedUntil.remove(id);
+        clearVoidEscape(id);
         if (activeVoids.contains(id)) finishVoid(player);
         applyWardenResistance(player);
     }
@@ -302,12 +323,29 @@ final class ClassAbilityListener implements Listener {
     }
 
     private void finishVoid(Player player) {
+        finishVoid(player, false);
+    }
+
+    private void finishVoid(Player player, boolean naturalCombatEnd) {
         UUID id = player.getUniqueId();
+        long now = System.currentTimeMillis();
+        boolean ascendantEscape = naturalCombatEnd
+                && progression.tier(id, "into_the_void") == VanguardProgression.Upgrade.ASCENDANT;
+        long lastPlayerCombat = lastPlayerCombatAt.getOrDefault(id, now);
         activeVoids.remove(id); combatUntil.remove(id); lastAttackAt.remove(id); invisibilityReturnAt.remove(id);
         player.removePotionEffect(PotionEffectType.INVISIBILITY); player.removePotionEffect(PotionEffectType.SPEED);
         PotionEffect invis = previousInvisibility.remove(id); if (invis != null && invis.getDuration() > 0) player.addPotionEffect(invis);
         PotionEffect speed = previousSpeed.remove(id); if (speed != null && speed.getDuration() > 0) player.addPotionEffect(speed);
+        if (ascendantEscape) {
+            voidEscapeDueAt.put(id, now + 30_000L);
+            voidEscapeBaseline.put(id, lastPlayerCombat);
+        } else clearVoidEscape(id);
         player.sendMessage(plugin.message("&7Into the Void ended."));
+    }
+
+    private void clearVoidEscape(UUID id) {
+        voidEscapeDueAt.remove(id);
+        voidEscapeBaseline.remove(id);
     }
 
     private Player attacker(EntityDamageEvent event) {
@@ -341,14 +379,17 @@ final class ClassAbilityListener implements Listener {
     @EventHandler public void onWorldChange(PlayerChangedWorldEvent event) {
         UUID id = event.getPlayer().getUniqueId();
         recentAttacker.remove(id); recentAttackerAt.remove(id);
+        clearVoidEscape(id);
         if (activeVoids.contains(id)) finishVoid(event.getPlayer());
     }
     @EventHandler public void onQuit(PlayerQuitEvent event) {
         UUID id = event.getPlayer().getUniqueId(); recentAttacker.remove(id); recentAttackerAt.remove(id);
+        clearVoidEscape(id);
         if (activeVoids.contains(id)) finishVoid(event.getPlayer());
     }
     @EventHandler public void onDeath(PlayerDeathEvent event) {
         UUID id = event.getEntity().getUniqueId(); recentAttacker.remove(id); recentAttackerAt.remove(id);
+        clearVoidEscape(id);
         if (activeVoids.contains(id)) finishVoid(event.getEntity());
     }
 

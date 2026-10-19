@@ -7,7 +7,8 @@ final class RelicProgressionRules {
         if (current == null) return null;
         if (relicTier == 1 && !ultimate && current == VanguardProgression.Upgrade.DORMANT)
             return VanguardProgression.Upgrade.IMPERFECT;
-        if (relicTier == 2 && !ultimate && current == VanguardProgression.Upgrade.IMPERFECT)
+        if (relicTier == 2 && !ultimate && current != VanguardProgression.Upgrade.PERFECT
+                && current != VanguardProgression.Upgrade.ASCENDANT)
             return VanguardProgression.Upgrade.PERFECT;
         if (relicTier == 2 && ultimate && current != VanguardProgression.Upgrade.PERFECT
                 && current != VanguardProgression.Upgrade.ASCENDANT) return VanguardProgression.Upgrade.PERFECT;

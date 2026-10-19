@@ -13,6 +13,14 @@ class RelicProgressionRulesTest {
         assertNull(RelicProgressionRules.next(VanguardProgression.Upgrade.DORMANT, 3, false));
     }
 
+    @Test void perfectRelicUpgradesAnImperfectRegularAbility() {
+        assertEquals(VanguardProgression.Upgrade.PERFECT,
+                RelicProgressionRules.next(VanguardProgression.Upgrade.IMPERFECT, 2, false));
+        assertEquals(VanguardProgression.Upgrade.PERFECT,
+                RelicProgressionRules.next(VanguardProgression.Upgrade.DORMANT, 2, false));
+        assertNull(RelicProgressionRules.next(VanguardProgression.Upgrade.PERFECT, 3, false));
+    }
+
     @Test void perfectAndAscendantFollowRegularAndUltimateProgression() {
         assertEquals(VanguardProgression.Upgrade.PERFECT,
                 RelicProgressionRules.next(VanguardProgression.Upgrade.IMPERFECT, 2, false));
@@ -22,7 +30,6 @@ class RelicProgressionRulesTest {
                 RelicProgressionRules.next(VanguardProgression.Upgrade.PERFECT, 3, true));
         assertNull(RelicProgressionRules.next(VanguardProgression.Upgrade.DORMANT, 3, true));
         assertNull(RelicProgressionRules.next(VanguardProgression.Upgrade.PERFECT, 2, true));
-        assertNull(RelicProgressionRules.next(VanguardProgression.Upgrade.DORMANT, 2, false));
         assertNull(RelicProgressionRules.next(VanguardProgression.Upgrade.PERFECT, 3, false));
         assertNull(RelicProgressionRules.next(VanguardProgression.Upgrade.IMPERFECT, 3, false));
     }

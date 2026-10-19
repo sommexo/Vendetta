@@ -264,7 +264,8 @@ final class RelicService implements Listener {
         VanguardProgression.Upgrade next = RelicProgressionRules.next(current, tier, ultimate);
         if (next == null) {
             player.sendMessage(plugin.message(tier == 3 ? "&cUpgrade the ultimate to Perfect before applying an Ascendant relic."
-                    : tier == 2 ? "&cA Perfect relic upgrades the class ultimate; it cannot upgrade regular abilities."
+                    : tier == 2 && ultimate ? "&cThat ultimate cannot receive a Perfect relic at its current progression."
+                    : tier == 2 ? "&cThat regular ability cannot receive a Perfect relic at its current progression."
                     : "&cThat regular ability is already upgraded or cannot receive this relic."));
             return false;
         }
@@ -502,27 +503,25 @@ final class RelicService implements Listener {
         if (!"vanguard".equals(clazz)) {
             if (tier == 1 && "class_relic".equals(ability)) {
                 String[] regular = clazz.equals("phantom") ? new String[]{"predators_instinct", "marked_prey"} : new String[]{"unshaken", "sculk_pulse"};
-                for (String key : regular) if (classProgression.tier(player.getUniqueId(), key) == VanguardProgression.Upgrade.DORMANT) return true;
+                for (String key : regular) if (canUpgrade(classProgression.tier(player.getUniqueId(), key), tier, false)) return true;
                 return false;
             }
             String ultimate = abilityKey(clazz, "ultimate");
             VanguardProgression.Upgrade current = classProgression.tier(player.getUniqueId(), ultimate);
             if (tier == 2 && "class_relic".equals(ability)) {
                 String[] regular = clazz.equals("phantom") ? new String[]{"predators_instinct", "marked_prey"} : new String[]{"unshaken", "sculk_pulse"};
-                for (String key : regular) if (classProgression.tier(player.getUniqueId(), key) == VanguardProgression.Upgrade.IMPERFECT) return true;
-                return current != VanguardProgression.Upgrade.PERFECT && current != VanguardProgression.Upgrade.ASCENDANT;
+                for (String key : regular) if (canUpgrade(classProgression.tier(player.getUniqueId(), key), tier, false)) return true;
+                return canUpgrade(current, tier, true);
             }
-            return tier == 3 && "class_relic".equals(ability) && current == VanguardProgression.Upgrade.PERFECT;
+            return tier == 3 && "class_relic".equals(ability) && canUpgrade(current, tier, true);
         }
         VanguardProgression.PlayerData data = progression.get(player.getUniqueId());
         if (tier == 1 && "select".equals(ability))
-            return data.berserker == VanguardProgression.Upgrade.DORMANT
-                    || data.bloodthirst == VanguardProgression.Upgrade.DORMANT;
+            return canUpgrade(data.berserker, tier, false) || canUpgrade(data.bloodthirst, tier, false);
         if (tier == 2 && "select".equals(ability))
-            return data.berserker == VanguardProgression.Upgrade.IMPERFECT
-                    || data.bloodthirst == VanguardProgression.Upgrade.IMPERFECT
-                    || data.ultimate != VanguardProgression.Upgrade.PERFECT
-                    && data.ultimate != VanguardProgression.Upgrade.ASCENDANT;
+            return canUpgrade(data.berserker, tier, false)
+                    || canUpgrade(data.bloodthirst, tier, false)
+                    || canUpgrade(data.ultimate, tier, true);
         VanguardProgression.Upgrade current = switch (ability) {
             case "berserker" -> data.berserker;
             case "bloodthirst", "headweb" -> data.bloodthirst;
@@ -530,10 +529,11 @@ final class RelicService implements Listener {
             default -> null;
         };
         if (current == null) return false;
-        if (tier == 1) return current == VanguardProgression.Upgrade.DORMANT;
-        if (tier == 2) return "ultimate".equals(ability)
-                && current != VanguardProgression.Upgrade.PERFECT && current != VanguardProgression.Upgrade.ASCENDANT;
-        return tier == 3 && "ultimate".equals(ability) && current == VanguardProgression.Upgrade.PERFECT;
+        return canUpgrade(current, tier, "ultimate".equals(ability));
+    }
+
+    private boolean canUpgrade(VanguardProgression.Upgrade current, int tier, boolean ultimate) {
+        return RelicProgressionRules.next(current, tier, ultimate) != null;
     }
     private String abilityDescription(String relicClass, String ability) {
         if (!"vanguard".equalsIgnoreCase(relicClass)) return "Class ability upgrade";

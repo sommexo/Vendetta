@@ -207,7 +207,7 @@ final class VenMarkCommands implements BasicCommand {
                     "Into the Void — Ultimate", "Phantom stealth ultimate.",
                     "Left-click an Ender Pearl; the normal pearl throw is cancelled.", "5 minutes.",
                     "Until combat ends after " + combatSeconds + " seconds without qualifying PvP damage.",
-                    "Invisibility and Speed I Dormant; Speed II Perfect/Ascendant. Attacking breaks Invisibility, returning after 3 seconds. Ascendant adds a one-use 1.5x hit below 10 hearts and Speed IV after more than 30 seconds without a hit.",
+                    "Invisibility and Speed I Dormant; Speed II Perfect/Ascendant. The first eligible hit within 30 seconds consumes a one-use bonus: 1.1x Dormant, 1.15x Imperfect, 1.3x Perfect, or 1.5x Ascendant when Phantom is below 10 hearts. Attacking breaks Invisibility, returning after 3 seconds. Ascendant also grants Speed IV after more than 30 seconds without a hit.",
                     "Landing a hit or taking damage resets the Ascendant escape timer. Clicking the pearl while active ends the ultimate.");
             case "afterimage" -> new AbilityDetails(
                     "Afterimage — Ascendant Bonus", "Ascendant bonus attached to Phantom's Into the Void ultimate.",
@@ -265,7 +265,7 @@ final class VenMarkCommands implements BasicCommand {
             }
             case "into-the-void" -> {
                 title = "Into the Void â€” Ultimate";
-                description = "Left-click with an Ender Pearl for Invisibility and Speed I. Attacking breaks invisibility; it returns after 3 seconds while combat continues. Perfect grants Speed II; Ascendant grants a one-hit bonus and Speed IV after 30 seconds without landing a hit. Cooldown: 5 minutes.";
+                description = "Left-click with an Ender Pearl for Invisibility and Speed I. Attacking breaks invisibility; it returns after 3 seconds while combat continues. Perfect grants Speed II. The first eligible hit within 30 seconds consumes a one-use bonus: 1.1x Dormant, 1.15x Imperfect, 1.3x Perfect, or 1.5x Ascendant when Phantom is below 10 hearts. Ascendant also grants Speed IV after 30 seconds without landing a hit. Cooldown: 5 minutes.";
             }
             case "predators-instinct" -> {
                 title = "Predator's Instinct — Counter";
