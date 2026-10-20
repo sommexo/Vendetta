@@ -3,6 +3,7 @@ package dev.prc.vendetta;
 import org.bukkit.*;
 import org.bukkit.block.Block;
 import org.bukkit.configuration.file.YamlConfiguration;
+import org.bukkit.entity.Entity;
 import org.bukkit.entity.EntityType;
 import org.bukkit.entity.Player;
 import org.bukkit.entity.Villager;
@@ -37,7 +38,7 @@ final class RelicEncounterService implements Listener {
     private final NamespacedKey villagerKey, questKey, shatterKey, villagerQuestTypeKey;
     private final File stateFile;
     private final YamlConfiguration state;
-    private final Map<UUID, Long> expiryTasks = new HashMap<>();
+    private final Map<UUID, Integer> expiryTasks = new HashMap<>();
     private final Map<UUID, Quest> quests = new HashMap<>();
     private final Map<UUID, HuntQuest> huntQuests = new HashMap<>();
     private final Map<UUID, Long> disabledUntil = new HashMap<>();
@@ -102,7 +103,7 @@ final class RelicEncounterService implements Listener {
     }
 
     void shutdown() {
-        for (Long task : expiryTasks.values()) Bukkit.getScheduler().cancelTask(task);
+        for (Integer task : expiryTasks.values()) Bukkit.getScheduler().cancelTask(task);
         expiryTasks.clear();
         saveState();
     }
@@ -140,7 +141,7 @@ final class RelicEncounterService implements Listener {
                 villager.setRecipes(Collections.emptyList());
             }
             long lifetime = Math.max(1, plugin.getConfig().getLong("relic-villagers.lifetime-minutes", 15)) * 60L * 20L;
-            long task = Bukkit.getScheduler().runTaskLater(plugin, () -> removeVillager(villager), lifetime).getTaskId();
+            int task = Bukkit.getScheduler().runTaskLater(plugin, () -> removeVillager(villager), lifetime).getTaskId();
             expiryTasks.put(villager.getUniqueId(), task);
             spawned++;
         }
@@ -153,7 +154,7 @@ final class RelicEncounterService implements Listener {
             for (Entity entity : world.getEntities()) {
                 if (entity instanceof Villager villager
                         && villager.getPersistentDataContainer().has(villagerKey, PersistentDataType.BYTE)) {
-                    Long task = expiryTasks.remove(villager.getUniqueId());
+                    Integer task = expiryTasks.remove(villager.getUniqueId());
                     if (task != null) Bukkit.getScheduler().cancelTask(task);
                     villager.remove();
                 }
