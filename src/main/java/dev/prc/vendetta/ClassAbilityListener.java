@@ -52,6 +52,7 @@ final class ClassAbilityListener implements Listener {
     private final Map<UUID, PotionEffect> previousSpeed = new HashMap<>();
     private final Map<UUID, Long> stunUntil = new HashMap<>();
     private final Map<UUID, Float> previousWalkSpeed = new HashMap<>();
+    private final Map<UUID, Boolean> previousMobAi = new HashMap<>();
 
     ClassAbilityListener(mark plugin, ClassProgression progression) {
         this.plugin = plugin;
@@ -158,8 +159,8 @@ final class ClassAbilityListener implements Listener {
                     && predatorArmedUntil.getOrDefault(victim.getUniqueId(), 0L) >= now
                     && isEligibleCounterAttacker(attacker)) {
                 predatorArmedUntil.remove(victim.getUniqueId());
-                predatorCooldown.put(victim.getUniqueId(), now + 20_000L);
-                progression.cooldown(victim.getUniqueId(), "predators_instinct", now + 20_000L);
+                predatorCooldown.put(victim.getUniqueId(), now + 120_000L);
+                progression.cooldown(victim.getUniqueId(), "predators_instinct", now + 120_000L);
                 try { progression.save(victim.getUniqueId()); }
                 catch (RuntimeException ex) { plugin.getLogger().severe("Could not save Predator's Instinct cooldown: " + ex.getMessage()); }
                 event.setDamage(0);
@@ -190,26 +191,91 @@ final class ClassAbilityListener implements Listener {
     }
 
     private void predatorCounter(Player phantom, LivingEntity attacker) {
-        attacker.addPotionEffect(new PotionEffect(PotionEffectType.BLINDNESS, 100, 0, false, true, true));
-        if (attacker instanceof Player playerAttacker) {
-            UUID id = playerAttacker.getUniqueId();
-            if (!previousWalkSpeed.containsKey(id)) previousWalkSpeed.put(id, playerAttacker.getWalkSpeed());
-            playerAttacker.setWalkSpeed(0f);
-            stunUntil.put(id, System.currentTimeMillis() + 5000L);
-        }
+        UUID phantomId = phantom.getUniqueId();
+        long now = System.currentTimeMillis();
+        VanguardProgression.Upgrade tier = progression.tier(phantomId, "predators_instinct");
         boolean mace = java.util.Arrays.stream(phantom.getInventory().getContents())
                 .anyMatch(item -> item != null && item.getType() == Material.MACE);
         ItemStack cursor = phantom.getItemOnCursor();
         mace |= cursor != null && cursor.getType() == Material.MACE;
-        Location destination = mace ? safeAbove(attacker) : null;
-        boolean teleported = destination != null && phantom.teleport(destination);
-        if (!teleported) {
-            destination = safeBehind(attacker);
-            if (destination != null && !phantom.teleport(destination))
-                phantom.sendMessage(plugin.message("&cPredator's Instinct triggered, but no safe teleport destination was available."));
+
+        int stunSeconds;
+        boolean blind;
+        int launchHeight = 0;
+        boolean grace = false;
+        switch (tier) {
+            case DORMANT -> { stunSeconds = 1; blind = false; }
+            case IMPERFECT -> {
+                stunSeconds = 3; blind = true;
+                if (mace) launchHeight = 8;
+            }
+            case PERFECT, ASCENDANT -> {
+                stunSeconds = mace ? 5 : 3;
+                blind = mace;
+                if (mace) { launchHeight = 12; grace = true; }
+            }
+            default -> { stunSeconds = 3; blind = true; }
         }
-        if (progression.tier(phantom.getUniqueId(), "into_the_void") == VanguardProgression.Upgrade.ASCENDANT)
-            phantom.addPotionEffect(new PotionEffect(PotionEffectType.SPEED, 240, 2, false, true, true));
+
+        if (blind) attacker.addPotionEffect(new PotionEffect(PotionEffectType.BLINDNESS, stunSeconds * 20, 0, false, true, true));
+        if (attacker instanceof Player target) {
+            UUID targetId = target.getUniqueId();
+            if (!previousWalkSpeed.containsKey(targetId)) previousWalkSpeed.put(targetId, target.getWalkSpeed());
+            target.setWalkSpeed(0f);
+            stunUntil.put(targetId, now + stunSeconds * 1000L);
+        } else if (attacker instanceof Monster mob) {
+            previousMobAi.putIfAbsent(mob.getUniqueId(), mob.hasAI());
+            mob.setAI(false);
+            plugin.getServer().getScheduler().runTaskLater(plugin, () -> {
+                Boolean hadAi = previousMobAi.remove(mob.getUniqueId());
+                if (hadAi != null && mob.isValid()) mob.setAI(hadAi);
+            }, stunSeconds * 20L);
+        }
+
+        if (tier == VanguardProgression.Upgrade.DORMANT || !mace || launchHeight == 0) {
+            Location behind = safeBehind(attacker);
+            if (behind != null) {
+                behind.setPitch(phantom.getLocation().getPitch());
+                phantom.teleport(behind);
+            } else {
+                phantom.sendMessage(plugin.message("&cPredator's Instinct triggered, but no safe teleport destination was available."));
+            }
+        } else {
+            Location origin = phantom.getLocation().clone();
+            origin.setPitch(90.0f);
+            Location launch = origin.add(0, launchHeight, 0);
+            if (launch.getY() < launch.getWorld().getMaxHeight() - 2
+                    && launch.getBlock().isPassable()
+                    && launch.clone().add(0, 1, 0).getBlock().isPassable()) {
+                phantom.teleport(launch);
+                phantom.setVelocity(new Vector(0, 0.12, 0));
+                phantom.setFallDistance(0);
+                if (grace) {
+                    phantom.addPotionEffect(new PotionEffect(PotionEffectType.SLOW_FALLING, 40, 0, false, false, true), true);
+                    plugin.getServer().getScheduler().runTaskLater(plugin, () -> {
+                        if (phantom.isOnline()) {
+                            phantom.removePotionEffect(PotionEffectType.SLOW_FALLING);
+                            phantom.setVelocity(phantom.getLocation().getDirection().multiply(0).setY(-0.08));
+                        }
+                    }, 40L);
+                }
+            } else {
+                Location behind = safeBehind(attacker);
+                if (behind != null) phantom.teleport(behind);
+            }
+        }
+
+        if (tier == VanguardProgression.Upgrade.ASCENDANT
+                || progression.tier(phantomId, "afterimage") == VanguardProgression.Upgrade.ASCENDANT) {
+            phantom.getWorld().spawnParticle(org.bukkit.Particle.CLOUD, phantom.getLocation().add(0, 1, 0),
+                    24, 0.45, 0.7, 0.45, 0.02);
+            final int[] ticks = {0};
+            plugin.getServer().getScheduler().runTaskTimer(plugin, task -> {
+                if (!phantom.isOnline() || ticks[0]++ >= 20) { task.cancel(); return; }
+                phantom.getWorld().spawnParticle(org.bukkit.Particle.CLOUD, phantom.getLocation().add(0, 1, 0),
+                        5, 0.25, 0.4, 0.25, 0.01);
+            }, 1L, 1L);
+        }
     }
 
     private Location safeAbove(LivingEntity attacker) {
