@@ -108,6 +108,8 @@ final class RelicEncounterService implements Listener {
         saveState();
     }
 
+    void triggerManualWave() { spawnWave(); }
+
     private void spawnWave() {
         cleanupOldVillagers();
         int count = Math.max(1, plugin.getConfig().getInt("relic-villagers.batch-size", 8));

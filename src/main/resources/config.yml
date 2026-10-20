@@ -112,6 +112,7 @@ vanguard:
     ascendant-strength-refresh-seconds: 60
 settings:
   opCooldownBypass: false
+  triggerableAngelEscapes: false
 relics:
   exploration-drop-chance: 0.002
   exploration-perfect-chance: 0.05

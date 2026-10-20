@@ -902,6 +902,27 @@ public final class mark extends JavaPlugin implements Listener {
         }
     }
 
+    boolean triggerableAngelEscapes() { return getConfig().getBoolean("settings.triggerableAngelEscapes", false); }
+
+    boolean setTriggerableAngelEscapes(boolean enabled) {
+        boolean previous = triggerableAngelEscapes();
+        getConfig().set("settings.triggerableAngelEscapes", enabled);
+        try {
+            getConfig().save(new File(getDataFolder(), "config.yml"));
+            return true;
+        } catch (IOException | RuntimeException ex) {
+            getConfig().set("settings.triggerableAngelEscapes", previous);
+            getLogger().severe("Could not save triggerable Angel escapes setting: " + ex.getMessage());
+            return false;
+        }
+    }
+
+    boolean triggerAngelEscape() {
+        if (relicEncounters == null) return false;
+        relicEncounters.triggerManualWave();
+        return true;
+    }
+
     boolean classChangerEnabled() { return getConfig().getBoolean("settings.classChanger", false); }
 
     boolean setClassChanger(boolean enabled) {
