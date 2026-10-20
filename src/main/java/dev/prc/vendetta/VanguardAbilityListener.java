@@ -53,16 +53,6 @@ final class VanguardAbilityListener implements Listener {
         if (data.bloodthirstReadyAt > now && !plugin.opCooldownBypass(player)) return;
         if (counterWindows.getOrDefault(player.getUniqueId(), 0L) > now) return;
         long deadline = now + counterWindowMillis(data.bloodthirst);
-        long oldCooldown = data.bloodthirstReadyAt;
-        data.bloodthirstReadyAt = deadline
-                + plugin.getConfig().getLong("vanguard.bloodthirst.cooldown-seconds", 30) * 1000L;
-        try { progress.save(player.getUniqueId()); }
-        catch (RuntimeException ex) {
-            data.bloodthirstReadyAt = oldCooldown;
-            try { progress.save(player.getUniqueId()); } catch (RuntimeException rollback) { ex.addSuppressed(rollback); }
-            plugin.getLogger().severe("Could not save Bloodthirst cooldown for " + player.getUniqueId() + ": " + ex.getMessage());
-            return;
-        }
         counterWindows.put(player.getUniqueId(), deadline);
         player.sendMessage(plugin.message("&bBloodthirst armed"));
         plugin.getServer().getScheduler().runTaskLater(plugin, () -> {
@@ -239,13 +229,21 @@ final class VanguardAbilityListener implements Listener {
 
     private void triggerBloodthirst(Player defender) {
         VanguardProgression.PlayerData data = progress.get(defender.getUniqueId());
+        long previousReadyAt = data.bloodthirstReadyAt;
         data.bloodthirstReadyAt = System.currentTimeMillis()
                 + plugin.getConfig().getLong("vanguard.bloodthirst.cooldown-seconds", 30) * 1000L;
-        progress.save(defender.getUniqueId());
+        try {
+            progress.save(defender.getUniqueId());
+        } catch (RuntimeException ex) {
+            data.bloodthirstReadyAt = previousReadyAt;
+            plugin.getLogger().severe("Could not save Bloodthirst cooldown for " + defender.getUniqueId() + ": " + ex.getMessage());
+            defender.sendMessage(plugin.message("&cBloodthirst triggered, but its cooldown could not be saved."));
+        }
         plugin.getServer().getScheduler().runTask(plugin, () -> {
             if (defender.isOnline() && !defender.isDead()) {
-            double maximum = defender.getAttribute(org.bukkit.attribute.Attribute.MAX_HEALTH).getValue();
-                defender.setHealth(maximum);
+                var maxHealth = defender.getAttribute(org.bukkit.attribute.Attribute.MAX_HEALTH);
+                if (maxHealth != null) defender.setHealth(Math.min(maxHealth.getValue(), defender.getHealth() + 0.0001) == maxHealth.getValue()
+                        ? maxHealth.getValue() : maxHealth.getValue());
             }
         });
         defender.sendMessage(plugin.message("&bBloodthirst counter! You recovered health."));

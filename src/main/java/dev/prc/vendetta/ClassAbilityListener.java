@@ -154,7 +154,7 @@ final class ClassAbilityListener implements Listener {
                 }
             }
             if ("phantom".equals(plugin.selectedClass(victim.getUniqueId()))
-                    && event instanceof EntityDamageByEntityEvent && victim.isSneaking()
+                    && event instanceof EntityDamageByEntityEvent
                     && predatorArmedUntil.getOrDefault(victim.getUniqueId(), 0L) >= now
                     && isEligibleCounterAttacker(attacker)) {
                 predatorArmedUntil.remove(victim.getUniqueId());
