@@ -242,8 +242,7 @@ final class VanguardAbilityListener implements Listener {
         plugin.getServer().getScheduler().runTask(plugin, () -> {
             if (defender.isOnline() && !defender.isDead()) {
                 var maxHealth = defender.getAttribute(org.bukkit.attribute.Attribute.MAX_HEALTH);
-                if (maxHealth != null) defender.setHealth(Math.min(maxHealth.getValue(), defender.getHealth() + 0.0001) == maxHealth.getValue()
-                        ? maxHealth.getValue() : maxHealth.getValue());
+                if (maxHealth != null) defender.setHealth(maxHealth.getValue());
             }
         });
         defender.sendMessage(plugin.message("&bBloodthirst counter! You recovered health."));
