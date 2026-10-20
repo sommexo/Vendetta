@@ -1,6 +1,7 @@
 package dev.prc.vendetta;
 
 import org.bukkit.Location;
+import org.bukkit.ChatColor;
 import org.bukkit.entity.Entity;
 import org.bukkit.entity.Player;
 import org.bukkit.entity.Projectile;
@@ -69,7 +70,7 @@ final class WardenUltimateService implements Listener {
         UUID id = warden.getUniqueId();
         Ultimate active = ultimates.get(id);
         if (active != null) {
-            active.cards = 0;
+            active.cards.clear();
             plugin.updateSidebar(warden);
             active.cycle = 0;
             active.combatUntil = System.currentTimeMillis() + COMBAT_TIMEOUT;
@@ -92,7 +93,7 @@ final class WardenUltimateService implements Listener {
             warden.sendMessage(plugin.message("&cAncient Guardian could not save its cooldown."));
             return;
         }
-        Ultimate created = new Ultimate(id, warden.getLocation().clone(), radius, now);
+        Ultimate created = new Ultimate(id, warden.getName(), warden.getLocation().clone(), radius, now);
         created.supporters.add(id);
         for (UUID ally : plugin.alliesOf(id))
             if ("warden".equals(plugin.selectedClass(ally))) created.supporters.add(ally);
@@ -196,12 +197,17 @@ final class WardenUltimateService implements Listener {
         if (attacker != null && victim != null && attacker != victim) {
             combatUntil.put(attacker.getUniqueId(), now + COMBAT_TIMEOUT);
             combatUntil.put(victim.getUniqueId(), now + COMBAT_TIMEOUT);
-            if (!isAllyOfAnyActiveOwner(attacker.getUniqueId(), victim.getUniqueId())) cardAndDamage(attacker, victim, event);
             for (Ultimate ultimate : ultimates.values()) {
                 if (sameSide(ultimate.owner, attacker.getUniqueId()) || sameSide(ultimate.owner, victim.getUniqueId()))
                     ultimate.combatUntil = now + COMBAT_TIMEOUT;
             }
             for (Ultimate ultimate : ultimates.values()) combatUntil.put(ultimate.owner, ultimate.combatUntil);
+        }
+        Entity target = event.getEntity();
+        if (attacker != null && target instanceof org.bukkit.entity.LivingEntity && attacker != target
+                && (!(target instanceof Player targetPlayer)
+                || !isAllyOfAnyActiveOwner(attacker.getUniqueId(), targetPlayer.getUniqueId()))) {
+            cardAndDamage(attacker, target, event);
         }
         if (victim != null && plugin.isBossAttack(event)) {
             combatUntil.put(victim.getUniqueId(), now + COMBAT_TIMEOUT);
@@ -230,17 +236,31 @@ final class WardenUltimateService implements Listener {
         return false;
     }
 
-    private void cardAndDamage(Player attacker, Player victim, EntityDamageEvent event) {
+    private void cardAndDamage(Player attacker, Entity victim, EntityDamageEvent event) {
         for (Ultimate ultimate : ultimates.values()) {
-            if (!sameSide(ultimate.owner, attacker.getUniqueId()) || sameSide(ultimate.owner, victim.getUniqueId())) continue;
-            double multiplier = WardenRules.cardMultiplier(ultimate.cards);
+            if (!sameSide(ultimate.owner, attacker.getUniqueId())
+                    || victim instanceof Player targetPlayer && sameSide(ultimate.owner, targetPlayer.getUniqueId())) continue;
+            GuardianCardLedger.Card current = ultimate.cards.get(victim.getUniqueId());
+            int count = current == null ? 0 : current.count();
+            double multiplier = WardenRules.cardMultiplier(count);
             event.setDamage(event.getDamage() * multiplier);
             if (event.getDamage() > 0) {
-                ultimate.cards = Math.min(50, ultimate.cards + 1);
+                ultimate.cards.addHit(victim.getUniqueId(), targetName(victim), !(victim instanceof Player));
                 Player owner = plugin.getServer().getPlayer(ultimate.owner);
                 if (owner != null) plugin.updateSidebar(owner);
             }
         }
+    }
+
+    private String targetName(Entity target) {
+        if (target instanceof Player player) return player.getName();
+        String custom = target.getCustomName();
+        if (custom != null && !custom.isBlank()) {
+            String plain = ChatColor.stripColor(custom);
+            if (plain != null && !plain.isBlank()) return plain;
+        }
+        String raw = target.getType().name().toLowerCase(java.util.Locale.ROOT).replace('_', ' ');
+        return Character.toUpperCase(raw.charAt(0)) + raw.substring(1);
     }
 
     private void refreshCombatForSide(UUID participant, long now) {
@@ -286,10 +306,10 @@ final class WardenUltimateService implements Listener {
         }
     }
 
-    int cards(UUID owner) {
-        Ultimate active = ultimates.get(owner);
-        return active == null ? 0 : active.cards;
-    }
+    boolean hasActiveGuardian(UUID owner) { return ultimates.containsKey(owner); }
+    String casterName(UUID owner) { Ultimate active = ultimates.get(owner); return active == null ? "Unknown" : active.casterName; }
+    List<GuardianCardLedger.Card> cards(UUID owner) { Ultimate active = ultimates.get(owner); return active == null ? List.of() : active.cards.entries(); }
+    int sidebarPages(UUID owner) { Ultimate active = ultimates.get(owner); return active == null ? 1 : AncientGuardianSidebar.pageCount(active.casterName, active.cards.entries()); }
 
     private void release(UUID captive) { capturedBy.remove(captive); }
 
@@ -369,16 +389,17 @@ final class WardenUltimateService implements Listener {
 
     private static final class Ultimate {
         final UUID owner;
+        final String casterName;
         final Location center;
         final double radius;
         final Set<UUID> capturedEnemies = new HashSet<>();
         final Set<UUID> affectedAllies = new HashSet<>();
         final Set<UUID> supporters = new HashSet<>();
-        int cards;
+        final GuardianCardLedger cards = new GuardianCardLedger();
         int cycle;
         long combatUntil;
-        Ultimate(UUID owner, Location center, double radius, long now) {
-            this.owner = owner; this.center = center; this.radius = radius; this.combatUntil = now + COMBAT_TIMEOUT;
+        Ultimate(UUID owner, String casterName, Location center, double radius, long now) {
+            this.owner = owner; this.casterName = casterName; this.center = center; this.radius = radius; this.combatUntil = now + COMBAT_TIMEOUT;
         }
     }
 }

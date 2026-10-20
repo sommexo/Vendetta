@@ -63,6 +63,7 @@ public final class mark extends JavaPlugin implements Listener {
     private File allyFile;
     private YamlConfiguration allyData;
     private final Map<UUID, Set<UUID>> allies = new HashMap<>();
+    private final Map<UUID, Integer> guardianSidebarPages = new HashMap<>();
     private VanguardProgression vanguardProgression;
     private ClassProgression classProgression;
     private VanguardAbilityListener vanguardAbilities;
@@ -134,6 +135,7 @@ public final class mark extends JavaPlugin implements Listener {
         getServer().getPluginManager().registerEvents(classInventoryRules, this);
         getServer().getPluginManager().registerEvents(classAbilities, this);
         getServer().getPluginManager().registerEvents(wardenUltimates, this);
+        getServer().getScheduler().runTaskTimer(this, this::advanceGuardianSidebarPages, 100L, 100L);
         getServer().getPluginManager().registerEvents(combatLogs, this);
         vanguardAbilities = new VanguardAbilityListener(this, vanguardProgression);
         getServer().getPluginManager().registerEvents(vanguardAbilities, this);
@@ -186,6 +188,7 @@ public final class mark extends JavaPlugin implements Listener {
 
     @EventHandler
     public void onPlayerQuit(org.bukkit.event.player.PlayerQuitEvent event) {
+        guardianSidebarPages.remove(event.getPlayer().getUniqueId());
         // Balance mutations are persisted transactionally; this also flushes the current in-memory snapshot.
         saveBalances();
     }
@@ -1188,9 +1191,31 @@ public final class mark extends JavaPlugin implements Listener {
         Objective objective = player.getScoreboard().getObjective("venmark");
         if (objective == null) return;
         for (String entry : objective.getScoreboard().getEntries()) objective.getScoreboard().resetScores(entry);
-        int cards = wardenUltimates == null ? 0 : wardenUltimates.cards(player.getUniqueId());
-        objective.getScore(color(WardenRules.cardDisplayLine(cards))).setScore(2);
-        objective.getScore(color("&eMarks: &f" + balance(player.getUniqueId()))).setScore(1);
+        UUID playerId = player.getUniqueId();
+        List<String> lines;
+        if (wardenUltimates != null && wardenUltimates.hasActiveGuardian(playerId)) {
+            List<GuardianCardLedger.Card> cards = wardenUltimates.cards(playerId);
+            int pages = wardenUltimates.sidebarPages(playerId);
+            int page = Math.floorMod(guardianSidebarPages.getOrDefault(playerId, 0), pages);
+            guardianSidebarPages.put(playerId, page);
+            lines = AncientGuardianSidebar.lines(wardenUltimates.casterName(playerId), cards, page, balance(playerId));
+        } else {
+            guardianSidebarPages.remove(playerId);
+            lines = List.of(WardenRules.cardDisplayLine(0), "&eMarks: &f" + balance(playerId));
+        }
+        int score = lines.size();
+        for (String line : lines) objective.getScore(color(line)).setScore(score--);
+    }
+
+    private void advanceGuardianSidebarPages() {
+        if (wardenUltimates == null) return;
+        for (Player player : getServer().getOnlinePlayers()) {
+            UUID id = player.getUniqueId();
+            int pages = wardenUltimates.sidebarPages(id);
+            if (pages <= 1) continue;
+            guardianSidebarPages.put(id, (guardianSidebarPages.getOrDefault(id, 0) + 1) % pages);
+            updateSidebar(player);
+        }
     }
     private String prettyName(EntityType type) {
         String raw = type.name().toLowerCase().replace('_', ' ');
