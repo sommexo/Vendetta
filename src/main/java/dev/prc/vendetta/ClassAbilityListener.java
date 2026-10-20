@@ -199,37 +199,37 @@ final class ClassAbilityListener implements Listener {
         ItemStack cursor = phantom.getItemOnCursor();
         mace |= cursor != null && cursor.getType() == Material.MACE;
 
-        int stunSeconds;
+        double stunSeconds;
         boolean blind;
         int launchHeight = 0;
         boolean grace = false;
         switch (tier) {
-            case DORMANT -> { stunSeconds = 1; blind = false; }
+            case DORMANT -> { stunSeconds = 0.5; blind = false; }
             case IMPERFECT -> {
                 stunSeconds = 3; blind = true;
                 if (mace) launchHeight = 8;
             }
             case PERFECT, ASCENDANT -> {
-                stunSeconds = mace ? 5 : 3;
+                stunSeconds = mace ? 5 : 2.5;
                 blind = mace;
                 if (mace) { launchHeight = 12; grace = true; }
             }
             default -> { stunSeconds = 3; blind = true; }
         }
 
-        if (blind) attacker.addPotionEffect(new PotionEffect(PotionEffectType.BLINDNESS, stunSeconds * 20, 0, false, true, true));
+        if (blind) attacker.addPotionEffect(new PotionEffect(PotionEffectType.BLINDNESS, (int) (stunSeconds * 20), 0, false, true, true));
         if (attacker instanceof Player target) {
             UUID targetId = target.getUniqueId();
             if (!previousWalkSpeed.containsKey(targetId)) previousWalkSpeed.put(targetId, target.getWalkSpeed());
             target.setWalkSpeed(0f);
-            stunUntil.put(targetId, now + stunSeconds * 1000L);
+            stunUntil.put(targetId, now + (long) (stunSeconds * 1000));
         } else if (attacker instanceof Monster mob) {
             previousMobAi.putIfAbsent(mob.getUniqueId(), mob.hasAI());
             mob.setAI(false);
             plugin.getServer().getScheduler().runTaskLater(plugin, () -> {
                 Boolean hadAi = previousMobAi.remove(mob.getUniqueId());
                 if (hadAi != null && mob.isValid()) mob.setAI(hadAi);
-            }, stunSeconds * 20L);
+            }, (long) Math.ceil(stunSeconds * 20));
         }
 
         if (tier == VanguardProgression.Upgrade.DORMANT || !mace || launchHeight == 0) {
