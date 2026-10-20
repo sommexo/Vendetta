@@ -34,7 +34,7 @@ final class ClassSelectionService implements Listener {
         this.plugin = plugin;
         this.vanguard = vanguard;
         file = new File(plugin.getDataFolder(), "player-classes.yml");
-        data = YamlConfiguration.loadConfiguration(file);
+        data = SafeYaml.load(file);
     }
 
     PlayerClass get(UUID uuid) {
@@ -102,7 +102,7 @@ final class ClassSelectionService implements Listener {
     }
 
     void save() {
-        try { data.save(file); } catch (IOException ex) { plugin.getLogger().severe("Could not save player classes: " + ex.getMessage()); }
+        try { SafeYaml.saveAtomically(data, file); } catch (IOException ex) { plugin.getLogger().severe("Could not save player classes: " + ex.getMessage()); }
     }
     private ItemStack choice(Material material, String name, String... lore) {
         ItemStack item = new ItemStack(material);

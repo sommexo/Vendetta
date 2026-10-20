@@ -68,10 +68,10 @@ final class RelicService implements Listener {
         relicIdKey = new NamespacedKey(plugin, "relic_id");
         formatKey = new NamespacedKey(plugin, "relic_format");
         exploredFile = new File(plugin.getDataFolder(), "explored-chests.yml");
-        exploredData = YamlConfiguration.loadConfiguration(exploredFile);
+        exploredData = SafeYaml.load(exploredFile);
         explored.addAll(exploredData.getStringList("opened"));
         relicIdentityFile = new File(plugin.getDataFolder(), "relic-identities.yml");
-        relicIdentityData = YamlConfiguration.loadConfiguration(relicIdentityFile);
+        relicIdentityData = SafeYaml.load(relicIdentityFile);
         issuedRelics.addAll(relicIdentityData.getStringList("issued"));
         consumedRelics.addAll(relicIdentityData.getStringList("consumed"));
     }
@@ -409,7 +409,7 @@ final class RelicService implements Listener {
         String location = block.getWorld().getUID() + ":" + block.getX() + ":" + block.getY() + ":" + block.getZ();
         if (!explored.add(location)) return;
         exploredData.set("opened", List.copyOf(explored));
-        try { exploredData.save(exploredFile); } catch (IOException ex) { plugin.getLogger().warning("Could not save explored chest state: " + ex.getMessage()); }
+        try { SafeYaml.saveAtomically(exploredData, exploredFile); } catch (IOException ex) { plugin.getLogger().warning("Could not save explored chest state: " + ex.getMessage()); }
         double chance = plugin.getConfig().getDouble("relics.exploration-drop-chance", 0.002);
         if (ThreadLocalRandom.current().nextDouble() >= chance) return;
         int tier = ThreadLocalRandom.current().nextDouble() < plugin.getConfig().getDouble("relics.exploration-perfect-chance", 0.05) ? 2 : 1;
@@ -468,7 +468,7 @@ final class RelicService implements Listener {
         relicIdentityData.set("format-version", 1);
         relicIdentityData.set("issued", List.copyOf(issuedRelics));
         relicIdentityData.set("consumed", List.copyOf(consumedRelics));
-        try { relicIdentityData.save(relicIdentityFile); return true; }
+        try { SafeYaml.saveAtomically(relicIdentityData, relicIdentityFile); return true; }
         catch (IOException ex) { plugin.getLogger().severe("Could not save relic identity ledger: " + ex.getMessage()); return false; }
     }
 

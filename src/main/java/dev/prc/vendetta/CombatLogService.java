@@ -35,7 +35,7 @@ final class CombatLogService implements Listener {
     CombatLogService(mark plugin) {
         this.plugin = plugin;
         file = new File(plugin.getDataFolder(), "combat-log.yml");
-        data = YamlConfiguration.loadConfiguration(file);
+        data = SafeYaml.load(file);
     }
 
     @EventHandler(priority = EventPriority.MONITOR, ignoreCancelled = true)
@@ -170,7 +170,7 @@ final class CombatLogService implements Listener {
     }
 
     private void save() {
-        try { data.save(file); }
+        try { SafeYaml.saveAtomically(data, file); }
         catch (IOException ex) { plugin.getLogger().severe("Could not save combat log records: " + ex.getMessage()); }
     }
 }

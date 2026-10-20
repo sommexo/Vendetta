@@ -70,6 +70,7 @@ final class WardenUltimateService implements Listener {
         Ultimate active = ultimates.get(id);
         if (active != null) {
             active.cards = 0;
+            plugin.updateSidebar(warden);
             active.cycle = 0;
             active.combatUntil = System.currentTimeMillis() + COMBAT_TIMEOUT;
             applyPulse(active);
@@ -106,6 +107,7 @@ final class WardenUltimateService implements Listener {
             return;
         }
         ultimates.put(id, created);
+        plugin.updateSidebar(warden);
         combatUntil.put(id, now + COMBAT_TIMEOUT);
         applyPulse(created);
         warden.sendMessage(plugin.message("&3Ancient Guardian activated (" + (int) radius + " blocks)."));
@@ -233,7 +235,11 @@ final class WardenUltimateService implements Listener {
             if (!sameSide(ultimate.owner, attacker.getUniqueId()) || sameSide(ultimate.owner, victim.getUniqueId())) continue;
             double multiplier = WardenRules.cardMultiplier(ultimate.cards);
             event.setDamage(event.getDamage() * multiplier);
-            if (event.getDamage() > 0) ultimate.cards = Math.min(50, ultimate.cards + 1);
+            if (event.getDamage() > 0) {
+                ultimate.cards = Math.min(50, ultimate.cards + 1);
+                Player owner = plugin.getServer().getPlayer(ultimate.owner);
+                if (owner != null) plugin.updateSidebar(owner);
+            }
         }
     }
 
@@ -275,8 +281,14 @@ final class WardenUltimateService implements Listener {
         Player owner = plugin.getServer().getPlayer(ultimate.owner);
         if (owner != null) {
             owner.setWalkSpeed(0.2f);
+            plugin.updateSidebar(owner);
             owner.sendMessage(plugin.message(message));
         }
+    }
+
+    int cards(UUID owner) {
+        Ultimate active = ultimates.get(owner);
+        return active == null ? 0 : active.cards;
     }
 
     private void release(UUID captive) { capturedBy.remove(captive); }

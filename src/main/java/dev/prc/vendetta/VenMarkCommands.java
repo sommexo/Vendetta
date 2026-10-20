@@ -226,7 +226,7 @@ final class VenMarkCommands implements BasicCommand {
                     "Ancient Guardian — Ultimate", "Warden area-control ultimate with capture and team effects.",
                     "Left-click a shield.", "15 minutes.",
                     "Until combat ends; effect durations cycle 3 seconds, 2 seconds, 1 second, then repeat.",
-                    "Capture radius: 30 blocks Dormant/Imperfect, 40 Perfect, 50 Ascendant. Warden/allies receive Resistance II; enemies Weakness I. Captured enemies share a fixed 100-block escape radius. Cards add 0.01x damage up to 1.5x.",
+                    "Capture radius: 30 blocks Dormant/Imperfect, 40 Perfect, 50 Ascendant. Warden/allies receive Resistance II; enemies Weakness I. Captured enemies share a fixed 100-block escape radius. Cards add 0.1x incoming damage per card up to 1.5x.",
                     "Captured enemies can move, mine, build, and interact. Reactivation refreshes and resets cards.");
             case "unyielding" -> new AbilityDetails(
                     "Unyielding — Ascendant Bonus", "Ancient Guardian's Ascendant emergency defense.",

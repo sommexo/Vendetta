@@ -6,10 +6,10 @@
 
     <groupId>dev.prc</groupId>
     <artifactId>vendetta</artifactId>
-    <version>v1-beta-build-4</version>
+    <version>release_build-1</version>
     <packaging>jar</packaging>
 
-    <name>venmark</name>
+    <name>vendetta</name>
 
     <properties>
         <java.version>25</java.version>
@@ -18,7 +18,7 @@
     </properties>
 
     <build>
-        <finalName>vendetta_paper1</finalName>
+        <finalName>vendetta-release1.1</finalName>
         <defaultGoal>clean package</defaultGoal>
         <plugins>
             <plugin>

@@ -143,3 +143,16 @@ relic-villagers:
     DESERT_PYRAMID: {weight: 3}
     OCEAN_MONUMENT: {weight: 2}
     END_CITY: {weight: 2}
+  # Optional fixed Wanderer offers. Each entry needs an ItemStack serialized by Bukkit's
+  # ItemStack#serialize() at `item` and a positive `marks` price. The sample uses a normal
+  # PAPER stack only to demonstrate the YAML format; replace it with your real custom item.
+  # Offers are sampled once when that Wanderer spawns, and invalid entries are skipped.
+  # Example:
+  # wanderer-custom-offers:
+  #   sample:
+  #     marks: 500
+  #     item:
+  #       ==: org.bukkit.inventory.ItemStack
+  #       type: PAPER
+  #       amount: 1
+  wanderer-custom-offers: {}
