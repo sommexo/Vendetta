@@ -72,6 +72,7 @@ public final class mark extends JavaPlugin implements Listener {
     private ClassAbilityListener classAbilities;
     private WardenUltimateService wardenUltimates;
     private CombatLogService combatLogs;
+    private RelicEncounterService relicEncounters;
     private File pendingFile, dailyFile, abuseFile;
     private YamlConfiguration pendingData, dailyData;
     private final List<String> abuseLog = new ArrayList<>();
@@ -137,6 +138,9 @@ public final class mark extends JavaPlugin implements Listener {
         getServer().getPluginManager().registerEvents(new VanguardActivationHandler(this, vanguardProgression, vanguardAbilities), this);
         RelicService relicService = new RelicService(this, vanguardProgression, classProgression);
         getServer().getPluginManager().registerEvents(relicService, this);
+        relicEncounters = new RelicEncounterService(this, relicService);
+        getServer().getPluginManager().registerEvents(relicEncounters, this);
+        relicEncounters.start();
         registerPermission("venmark.use", PermissionDefault.TRUE, "Use VenMark player commands");
         registerPermission("venmark.admin", PermissionDefault.OP, "Manage VenMark economy data");
         registerPermission("venmark.marks.give", PermissionDefault.OP, "Grant banked Marks");
@@ -160,6 +164,7 @@ public final class mark extends JavaPlugin implements Listener {
         if (classAbilities != null) classAbilities.shutdown();
         if (wardenUltimates != null) wardenUltimates.shutdown();
         if (combatLogs != null) combatLogs.shutdown();
+        if (relicEncounters != null) relicEncounters.shutdown();
         saveBalances();
         saveKillCooldowns();
         saveBounties();
@@ -878,6 +883,7 @@ public final class mark extends JavaPlugin implements Listener {
         return true;
     }
     String message(String message) { return color(message); }
+    boolean isRelicDisabled(UUID uuid) { return relicEncounters != null && relicEncounters.isDisabled(uuid); }
 
     boolean opCooldownBypass(Player player) {
         return player.isOp() && getConfig().getBoolean("settings.opCooldownBypass", false);

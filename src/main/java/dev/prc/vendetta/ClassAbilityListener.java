@@ -62,6 +62,7 @@ final class ClassAbilityListener implements Listener {
     @EventHandler(ignoreCancelled = true)
     public void onInteract(PlayerInteractEvent event) {
         Player player = event.getPlayer();
+        if (plugin.isRelicDisabled(player.getUniqueId())) return;
         if (!ActivationRules.primaryHand(event.getHand())) return;
         String clazz = plugin.selectedClass(player.getUniqueId());
         ItemStack item = event.getItem();
@@ -84,7 +85,7 @@ final class ClassAbilityListener implements Listener {
         long cooldown = Math.max(predatorCooldown.getOrDefault(id, 0L), progression.cooldown(id, "predators_instinct"));
         if ((!plugin.opCooldownBypass(player) && cooldown > now)
                 || predatorArmedUntil.getOrDefault(id, 0L) > now) return;
-        predatorArmedUntil.put(id, now + PhantomRules.PREDATORS_INSTINCT_ARM_WINDOW_MILLIS);
+        predatorArmedUntil.put(id, now + 1000L);
         player.sendMessage(plugin.message("&bPredator's Instinct armed"));
     }
 
@@ -156,28 +157,14 @@ final class ClassAbilityListener implements Listener {
                     && event instanceof EntityDamageByEntityEvent && victim.isSneaking()
                     && predatorArmedUntil.getOrDefault(victim.getUniqueId(), 0L) >= now
                     && isEligibleCounterAttacker(attacker)) {
-                UUID phantomId = victim.getUniqueId();
-                long previousReadyAt = progression.cooldown(phantomId, "predators_instinct");
-                long newReadyAt = now + PhantomRules.PREDATORS_INSTINCT_COOLDOWN_MILLIS;
-                progression.cooldown(phantomId, "predators_instinct", newReadyAt);
-                boolean cooldownSaved = false;
-                try {
-                    progression.save(phantomId);
-                    cooldownSaved = true;
-                } catch (RuntimeException ex) {
-                    progression.cooldown(phantomId, "predators_instinct", previousReadyAt);
-                    predatorCooldown.put(phantomId, previousReadyAt);
-                    try { progression.save(phantomId); }
-                    catch (RuntimeException rollback) { ex.addSuppressed(rollback); }
-                    plugin.getLogger().severe("Could not save Predator's Instinct cooldown; counter not triggered: " + ex.getMessage());
-                }
-                if (cooldownSaved) {
-                    predatorCooldown.put(phantomId, newReadyAt);
-                    predatorArmedUntil.remove(phantomId);
-                    event.setDamage(0);
-                    event.setCancelled(true);
-                    predatorCounter(victim, attacker);
-                }
+                predatorArmedUntil.remove(victim.getUniqueId());
+                predatorCooldown.put(victim.getUniqueId(), now + 20_000L);
+                progression.cooldown(victim.getUniqueId(), "predators_instinct", now + 20_000L);
+                try { progression.save(victim.getUniqueId()); }
+                catch (RuntimeException ex) { plugin.getLogger().severe("Could not save Predator's Instinct cooldown: " + ex.getMessage()); }
+                event.setDamage(0);
+                event.setCancelled(true);
+                predatorCounter(victim, attacker);
             }
         }
         if (eligibleCombatDamage(event)) {
@@ -203,13 +190,12 @@ final class ClassAbilityListener implements Listener {
     }
 
     private void predatorCounter(Player phantom, LivingEntity attacker) {
-        attacker.addPotionEffect(new PotionEffect(PotionEffectType.BLINDNESS, (int) (PhantomRules.PREDATORS_INSTINCT_STUN_MILLIS / 50L), 0, false, true, true));
+        attacker.addPotionEffect(new PotionEffect(PotionEffectType.BLINDNESS, 100, 0, false, true, true));
         if (attacker instanceof Player playerAttacker) {
             UUID id = playerAttacker.getUniqueId();
             if (!previousWalkSpeed.containsKey(id)) previousWalkSpeed.put(id, playerAttacker.getWalkSpeed());
             playerAttacker.setWalkSpeed(0f);
-            playerAttacker.setVelocity(new Vector(0, 0, 0));
-            stunUntil.put(id, System.currentTimeMillis() + PhantomRules.PREDATORS_INSTINCT_STUN_MILLIS);
+            stunUntil.put(id, System.currentTimeMillis() + 5000L);
         }
         boolean mace = java.util.Arrays.stream(phantom.getInventory().getContents())
                 .anyMatch(item -> item != null && item.getType() == Material.MACE);
@@ -250,12 +236,10 @@ final class ClassAbilityListener implements Listener {
 
     private void tick() {
         long now = System.currentTimeMillis();
-        predatorArmedUntil.entrySet().removeIf(entry -> entry.getValue() < now);
-        for (UUID id : Set.copyOf(stunUntil.keySet())) {
+        for (UUID id : Set.copyOf(stunUntil.keySet())) if (stunUntil.get(id) <= now) {
             Player player = plugin.getServer().getPlayer(id);
-            if (player == null) continue;
-            if (stunUntil.getOrDefault(id, 0L) <= now) clearStun(player);
-            else player.setVelocity(new Vector(0, 0, 0));
+            if (player != null) player.setWalkSpeed(previousWalkSpeed.getOrDefault(id, 0.2f));
+            stunUntil.remove(id); previousWalkSpeed.remove(id);
         }
         for (UUID id : Set.copyOf(activeVoids)) {
             Player player = plugin.getServer().getPlayer(id);
@@ -276,17 +260,11 @@ final class ClassAbilityListener implements Listener {
         }
     }
 
-    @EventHandler(priority = EventPriority.HIGHEST, ignoreCancelled = false)
+    @EventHandler(priority = EventPriority.HIGHEST, ignoreCancelled = true)
     public void onStunnedMove(PlayerMoveEvent event) {
-        Player player = event.getPlayer();
-        if (stunUntil.getOrDefault(player.getUniqueId(), 0L) <= System.currentTimeMillis() || event.getTo() == null) return;
-        if (!event.getFrom().getWorld().equals(event.getTo().getWorld())
-                || event.getFrom().getX() != event.getTo().getX()
-                || event.getFrom().getY() != event.getTo().getY()
-                || event.getFrom().getZ() != event.getTo().getZ()) {
-            event.setTo(event.getFrom());
-        }
-        player.setVelocity(new Vector(0, 0, 0));
+        if (stunUntil.getOrDefault(event.getPlayer().getUniqueId(), 0L) <= System.currentTimeMillis() || event.getTo() == null) return;
+        if (event.getFrom().getX() != event.getTo().getX() || event.getFrom().getY() != event.getTo().getY()
+                || event.getFrom().getZ() != event.getTo().getZ()) event.setTo(event.getFrom());
     }
 
     void shutdown() {
@@ -302,16 +280,10 @@ final class ClassAbilityListener implements Listener {
     }
 
     void classChanged(Player player) {
-        if (activeVoids.contains(player.getUniqueId())) finishVoid(player);
-        clearStun(player);
-        applyWardenResistance(player);
-    }
-
-    private void clearStun(Player player) {
         UUID id = player.getUniqueId();
-        stunUntil.remove(id);
-        Float previousSpeed = previousWalkSpeed.remove(id);
-        if (previousSpeed != null) player.setWalkSpeed(previousSpeed);
+        predatorArmedUntil.remove(id);
+        if (activeVoids.contains(id)) finishVoid(player);
+        applyWardenResistance(player);
     }
 
     private void refreshVoid(Player player, boolean restoreInvisibility) {
@@ -376,23 +348,17 @@ final class ClassAbilityListener implements Listener {
 
     @EventHandler public void onJoin(PlayerJoinEvent event) { applyWardenResistance(event.getPlayer()); }
     @EventHandler public void onWorldChange(PlayerChangedWorldEvent event) {
-        Player player = event.getPlayer();
-        UUID id = player.getUniqueId();
+        UUID id = event.getPlayer().getUniqueId();
         recentAttacker.remove(id); recentAttackerAt.remove(id);
-        clearStun(player);
-        if (activeVoids.contains(id)) finishVoid(player);
+        if (activeVoids.contains(id)) finishVoid(event.getPlayer());
     }
     @EventHandler public void onQuit(PlayerQuitEvent event) {
-        Player player = event.getPlayer();
-        UUID id = player.getUniqueId(); recentAttacker.remove(id); recentAttackerAt.remove(id);
-        clearStun(player);
-        if (activeVoids.contains(id)) finishVoid(player);
+        UUID id = event.getPlayer().getUniqueId(); recentAttacker.remove(id); recentAttackerAt.remove(id);
+        if (activeVoids.contains(id)) finishVoid(event.getPlayer());
     }
     @EventHandler public void onDeath(PlayerDeathEvent event) {
-        Player player = event.getEntity();
-        UUID id = player.getUniqueId(); recentAttacker.remove(id); recentAttackerAt.remove(id);
-        clearStun(player);
-        if (activeVoids.contains(id)) finishVoid(player);
+        UUID id = event.getEntity().getUniqueId(); recentAttacker.remove(id); recentAttackerAt.remove(id);
+        if (activeVoids.contains(id)) finishVoid(event.getEntity());
     }
 
     void applyWardenResistance(Player player) {

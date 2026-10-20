@@ -90,3 +90,19 @@ mvn clean package
 The plugin JAR is created under `target/`.
 
 Release name: `v1-beta build 4`. The Maven version uses `v1-beta-build-4` so the coordinates and artifact filename remain valid.
+
+
+## Special Relic Villagers and Angelic Expeditions
+
+The relic merchant system uses plugin-spawned custom-trade clerics rather than naturally spawned clerics.
+
+- A wave of **8 villagers** spawns on startup and every **60 minutes** by default.
+- Each villager remains for **15 minutes**, then disappears with smoke particles and a villager-death sound.
+- Arrival and departure messages are `Angels escaped` and `Escaped angels enchained`.
+- Each villager is immobile and its relic offers are fixed when it spawns. Right-click to trade; left-click to accept its quest. Structure weights and spawn settings live under `relic-villagers` in `config.yml`.
+- Ruined portals, pillager outposts, villages, desert pyramids, ocean monuments, and End Cities have different relic-tier odds.
+- Most villagers offer a hunting quest to defeat 5–10 zombies, skeletons, spiders, creepers, or pillagers. Completion awards 3–8 diamonds and has a 30% chance to award 500–1,250 Marks.
+- Some villagers instead offer Nether or End expeditions. These create persistent owner-bound shulker caches; only the owner can break and claim the cache, which gives exactly three reward entries.
+- Shatter Sword costs 500 banked Marks on a successful player hit and temporarily disables the target's class-ability triggers for 30 minutes.
+
+Quest progress, claimed cache coordinates, and active disable timers are stored in `relic-encounters.yml`. This implementation has not been run on a live Paper server; test villager spawning, custom trades, quest completion and restart recovery, cache protection, and Shatter Sword behavior in a staging world before relying on it.

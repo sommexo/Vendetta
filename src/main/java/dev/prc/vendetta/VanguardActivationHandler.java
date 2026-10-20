@@ -23,6 +23,7 @@ final class VanguardActivationHandler implements Listener {
     public void onRightClick(PlayerInteractEvent event) {
         if (!event.getAction().isRightClick() || event.getHand() != EquipmentSlot.HAND) return;
         Player player = event.getPlayer();
+        if (plugin.isRelicDisabled(player.getUniqueId())) return;
         if (!progression.get(player.getUniqueId()).vanguard) return;
         if (event.getItem() == null || !event.getItem().getType().name().endsWith("_SWORD")) return;
         abilities.beginBloodthirstWindow(player);
