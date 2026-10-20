@@ -1,5 +1,4 @@
-# VenMark — v1-beta build 4
-
+# VenMark 
 VenMark is a Paper plugin for Vendetta SMP. The project targets the Paper 26.3 command API and Java 25. Paper commands are registered in code through `JavaPlugin.registerCommand`; `paper-plugin.yml` intentionally has no YAML command declarations. The Maven dependency currently resolves the Paper 26.3 pre-release API configured by `pom.xml`.
 
 ## Player commands
