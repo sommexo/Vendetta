@@ -229,7 +229,11 @@ final class RelicEncounterService implements Listener {
         List<MerchantRecipe> recipes = new ArrayList<>();
         // Each villager receives a fixed offer set once; reopening the trade screen cannot reroll it.
         List<Integer> tiers = new ArrayList<>();
-        for (int i = 0; i < 3; i++) tiers.add(angelType.equals("ascendant") ? 3 : 2);
+        for (int i = 0; i < 3; i++) {
+            // Structure mapping influences the Ascendant Angel's fixed offer tier. Perfect Angels
+            // remain strictly Perfect-tier as specified.
+            tiers.add(angelType.equals("ascendant") ? Math.max(2, chooseTradeTier(structureName)) : 2);
+        }
         String[] classes = {"vanguard", "phantom", "warden"};
         for (int i = 0; i < 3; i++) {
             String clazz = classes[ThreadLocalRandom.current().nextInt(classes.length)];

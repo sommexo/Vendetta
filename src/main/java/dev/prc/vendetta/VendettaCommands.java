@@ -69,7 +69,6 @@ final class VendettaCommands implements BasicCommand {
 
     @Override
     public Collection<String> suggest(CommandSourceStack source, String[] args) {
-        if (args.length == 1) return List.of("settings");
         if (args.length == 1) return List.of("settings", "angelEscape");
         if (args.length == 2 && args[0].equalsIgnoreCase("settings")) return List.of("opCooldownBypass", "classChanger", "triggerableAngelEscapes");
         if (args.length == 3 && args[0].equalsIgnoreCase("settings") && List.of("opCooldownBypass", "classChanger", "triggerableAngelEscapes").contains(args[1]))
