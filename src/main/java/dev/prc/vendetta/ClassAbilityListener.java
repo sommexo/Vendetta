@@ -53,6 +53,8 @@ final class ClassAbilityListener implements Listener {
     private final Map<UUID, Long> stunUntil = new HashMap<>();
     private final Map<UUID, Float> previousWalkSpeed = new HashMap<>();
     private final Map<UUID, Boolean> previousMobAi = new HashMap<>();
+    private final Map<UUID, Long> mobStunUntil = new HashMap<>();
+    private final Map<UUID, Long> knockupUntil = new HashMap<>();
 
     ClassAbilityListener(mark plugin, ClassProgression progression) {
         this.plugin = plugin;
@@ -194,10 +196,8 @@ final class ClassAbilityListener implements Listener {
         UUID phantomId = phantom.getUniqueId();
         long now = System.currentTimeMillis();
         VanguardProgression.Upgrade tier = progression.tier(phantomId, "predators_instinct");
-        boolean mace = java.util.Arrays.stream(phantom.getInventory().getContents())
-                .anyMatch(item -> item != null && item.getType() == Material.MACE);
-        ItemStack cursor = phantom.getItemOnCursor();
-        mace |= cursor != null && cursor.getType() == Material.MACE;
+        ItemStack held = phantom.getInventory().getItemInMainHand();
+        boolean mace = held != null && held.getType() == Material.MACE;
 
         double stunSeconds;
         boolean blind;
@@ -222,12 +222,17 @@ final class ClassAbilityListener implements Listener {
             UUID targetId = target.getUniqueId();
             if (!previousWalkSpeed.containsKey(targetId)) previousWalkSpeed.put(targetId, target.getWalkSpeed());
             target.setWalkSpeed(0f);
-            stunUntil.put(targetId, now + (long) (stunSeconds * 1000));
+            stunUntil.merge(targetId, now + (long) (stunSeconds * 1000), Math::max);
         } else if (attacker instanceof Monster mob) {
-            previousMobAi.putIfAbsent(mob.getUniqueId(), mob.hasAI());
+            UUID mobId = mob.getUniqueId();
+            previousMobAi.putIfAbsent(mobId, mob.hasAI());
             mob.setAI(false);
+            long expiry = now + (long) (stunSeconds * 1000);
+            mobStunUntil.merge(mobId, expiry, Math::max);
             plugin.getServer().getScheduler().runTaskLater(plugin, () -> {
-                Boolean hadAi = previousMobAi.remove(mob.getUniqueId());
+                if (mobStunUntil.getOrDefault(mobId, 0L) != expiry) return;
+                mobStunUntil.remove(mobId);
+                Boolean hadAi = previousMobAi.remove(mobId);
                 if (hadAi != null && mob.isValid()) mob.setAI(hadAi);
             }, (long) Math.ceil(stunSeconds * 20));
         }
@@ -241,20 +246,19 @@ final class ClassAbilityListener implements Listener {
                 phantom.sendMessage(plugin.message("&cPredator's Instinct triggered, but no safe teleport destination was available."));
             }
         } else {
-            Location origin = phantom.getLocation().clone();
-            origin.setPitch(90.0f);
-            Location launch = origin.add(0, launchHeight, 0);
+            Location launch = attacker.getLocation();
             if (launch.getY() < launch.getWorld().getMaxHeight() - 2
-                    && launch.getBlock().isPassable()
                     && launch.clone().add(0, 1, 0).getBlock().isPassable()) {
-                phantom.teleport(launch);
-                phantom.setVelocity(new Vector(0, 0.12, 0));
-                phantom.setFallDistance(0);
+                attacker.setVelocity(new Vector(0, launchHeight >= 12 ? 1.55 : 1.25, 0));
+                attacker.setFallDistance(0);
+                if (attacker instanceof Player target) knockupUntil.put(target.getUniqueId(), now + 1_200L);
                 if (grace) {
                     phantom.addPotionEffect(new PotionEffect(PotionEffectType.SLOW_FALLING, 40, 0, false, false, true), true);
                     plugin.getServer().getScheduler().runTaskLater(plugin, () -> {
                         if (phantom.isOnline()) {
-                            phantom.removePotionEffect(PotionEffectType.SLOW_FALLING);
+                            // Do not erase a newer slow-falling effect applied by another system.
+                            PotionEffect current = phantom.getPotionEffect(PotionEffectType.SLOW_FALLING);
+                            if (current != null && current.getDuration() <= 2) phantom.removePotionEffect(PotionEffectType.SLOW_FALLING);
                             phantom.setVelocity(phantom.getLocation().getDirection().multiply(0).setY(-0.08));
                         }
                     }, 40L);
@@ -307,6 +311,7 @@ final class ClassAbilityListener implements Listener {
             if (player != null) player.setWalkSpeed(previousWalkSpeed.getOrDefault(id, 0.2f));
             stunUntil.remove(id); previousWalkSpeed.remove(id);
         }
+        knockupUntil.entrySet().removeIf(entry -> entry.getValue() <= now);
         for (UUID id : Set.copyOf(activeVoids)) {
             Player player = plugin.getServer().getPlayer(id);
             if (player == null || voidActivationEndsAt.getOrDefault(id, 0L) <= now) {
@@ -329,8 +334,14 @@ final class ClassAbilityListener implements Listener {
     @EventHandler(priority = EventPriority.HIGHEST, ignoreCancelled = true)
     public void onStunnedMove(PlayerMoveEvent event) {
         if (stunUntil.getOrDefault(event.getPlayer().getUniqueId(), 0L) <= System.currentTimeMillis() || event.getTo() == null) return;
-        if (event.getFrom().getX() != event.getTo().getX() || event.getFrom().getY() != event.getTo().getY()
-                || event.getFrom().getZ() != event.getTo().getZ()) event.setTo(event.getFrom());
+        if (event.getFrom().getX() != event.getTo().getX() || event.getFrom().getZ() != event.getTo().getZ()
+                || (event.getFrom().getY() != event.getTo().getY()
+                && knockupUntil.getOrDefault(event.getPlayer().getUniqueId(), 0L) <= System.currentTimeMillis())) {
+            Location allowed = event.getFrom().clone();
+            if (knockupUntil.getOrDefault(event.getPlayer().getUniqueId(), 0L) > System.currentTimeMillis())
+                allowed.setY(event.getTo().getY());
+            event.setTo(allowed);
+        }
     }
 
     void shutdown() {
@@ -415,16 +426,27 @@ final class ClassAbilityListener implements Listener {
     @EventHandler public void onJoin(PlayerJoinEvent event) { applyWardenResistance(event.getPlayer()); }
     @EventHandler public void onWorldChange(PlayerChangedWorldEvent event) {
         UUID id = event.getPlayer().getUniqueId();
+        clearPlayerStun(event.getPlayer());
         recentAttacker.remove(id); recentAttackerAt.remove(id);
         if (activeVoids.contains(id)) finishVoid(event.getPlayer());
     }
     @EventHandler public void onQuit(PlayerQuitEvent event) {
         UUID id = event.getPlayer().getUniqueId(); recentAttacker.remove(id); recentAttackerAt.remove(id);
+        clearPlayerStun(event.getPlayer());
         if (activeVoids.contains(id)) finishVoid(event.getPlayer());
     }
     @EventHandler public void onDeath(PlayerDeathEvent event) {
         UUID id = event.getEntity().getUniqueId(); recentAttacker.remove(id); recentAttackerAt.remove(id);
+        clearPlayerStun(event.getEntity());
         if (activeVoids.contains(id)) finishVoid(event.getEntity());
+    }
+
+    private void clearPlayerStun(Player player) {
+        UUID id = player.getUniqueId();
+        stunUntil.remove(id);
+        knockupUntil.remove(id);
+        Float speed = previousWalkSpeed.remove(id);
+        if (speed != null) player.setWalkSpeed(speed);
     }
 
     void applyWardenResistance(Player player) {
