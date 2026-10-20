@@ -84,8 +84,9 @@ public final class mark extends JavaPlugin implements Listener {
         balanceFile = new File(getDataFolder(), "balances.yml");
         balanceData = YamlConfiguration.loadConfiguration(balanceFile);
         for (String key : balanceData.getKeys(false)) {
+            if (key.equals("transactions")) continue;
             try {
-                balances.put(UUID.fromString(key), Math.max(0L, balanceData.getLong(key)));
+                balances.put(UUID.fromString(key), balanceData.getLong(key));
             } catch (IllegalArgumentException exception) {
                 getLogger().warning("Ignoring invalid UUID in balances.yml: " + key);
             }
@@ -128,6 +129,7 @@ public final class mark extends JavaPlugin implements Listener {
         wardenUltimates = new WardenUltimateService(this, classProgression);
         combatLogs = new CombatLogService(this);
         getServer().getPluginManager().registerEvents(this, this);
+        getServer().getScheduler().runTaskTimer(this, this::saveBalances, 20L * 60 * 10, 20L * 60 * 10);
         getServer().getPluginManager().registerEvents(classSelection, this);
         getServer().getPluginManager().registerEvents(classInventoryRules, this);
         getServer().getPluginManager().registerEvents(classAbilities, this);
@@ -180,6 +182,12 @@ public final class mark extends JavaPlugin implements Listener {
     public void onJoin(PlayerJoinEvent event) {
         balances.putIfAbsent(event.getPlayer().getUniqueId(), 0L);
         showBalance(event.getPlayer());
+    }
+
+    @EventHandler
+    public void onPlayerQuit(org.bukkit.event.player.PlayerQuitEvent event) {
+        // Balance mutations are persisted transactionally; this also flushes the current in-memory snapshot.
+        saveBalances();
     }
 
     @EventHandler
@@ -281,10 +289,10 @@ public final class mark extends JavaPlugin implements Listener {
             return;
         }
         long victimBalance = balance(victim.getUniqueId());
-        long calculatedLoss = victimBalance / 4; // floor to whole Marks.
+        long calculatedLoss = Math.max(0L, victimBalance / 4); // floor to whole Marks; Wanderer debt is not compounded.
         long transfer = Math.min(calculatedLoss, 2500L);
         long reward = Math.max(0L, getConfig().getLong("pvp.base-reward", 500));
-        set(victim.getUniqueId(), victimBalance - calculatedLoss);
+        if (calculatedLoss > 0) set(victim.getUniqueId(), victimBalance - calculatedLoss);
         credit(killerId, transfer, "PvP bank transfer from " + victim.getUniqueId());
         if (calculatedLoss > transfer) recordAbuse("pvp-transfer-cap sink=" + (calculatedLoss - transfer) + " killer=" + secondId + " victim=" + firstId + " time=" + now);
         credit(killerId, reward, "PvP daily reward");
@@ -654,7 +662,10 @@ public final class mark extends JavaPlugin implements Listener {
         if (classAbilities != null) classAbilities.classChanged(player);
         if (wardenUltimates != null) wardenUltimates.classChanged(player);
     }
-    long bankRoom(UUID uuid) { return MAX_BANK - balance(uuid); }
+    long bankRoom(UUID uuid) {
+        long current = balance(uuid);
+        return current < 0 ? MAX_BANK : Math.max(0L, MAX_BANK - current);
+    }
     long currencyDenomination(ItemStack item) { return currency.denomination(item); }
     List<ItemStack> currencyItems(long denomination, int count) { return List.of(currency.create(denomination, count)); }
     List<ItemStack> currencyItemsFor(long amount) { return currency.itemsFor(amount); }
@@ -851,7 +862,11 @@ public final class mark extends JavaPlugin implements Listener {
         if (amount <= 0) return;
         long available = bankRoom(uuid);
         long deposited = Math.min(available, amount);
-        if (deposited > 0) set(uuid, balance(uuid) + deposited);
+        if (deposited > 0) {
+            long updated = balance(uuid) + deposited;
+            boolean saved = updated < 0 ? persistBalanceAllowingDebt(uuid, updated) : persistBalance(uuid, updated);
+            if (!saved) return;
+        }
         long overflow = amount - deposited;
         if (overflow > 0) {
             String path = uuid.toString();
@@ -871,6 +886,35 @@ public final class mark extends JavaPlugin implements Listener {
         if (amount < 0 || balance(uuid) < amount) return false;
         return persistBalance(uuid, balance(uuid) - amount);
     }
+
+    boolean deductUpTo(UUID uuid, long amount) {
+        if (amount < 0) return false;
+        long current = balance(uuid);
+        if (current <= 0) return true;
+        return persistBalance(uuid, Math.max(0L, current - amount));
+    }
+
+    boolean applyWandererFailurePenalty(UUID uuid, long amount, String transactionId) {
+        if (amount < 0 || transactionId == null || transactionId.isBlank()) return false;
+        String marker = "transactions.wanderer." + transactionId;
+        if (balanceData.getBoolean(marker, false)) return true;
+        long previous = balance(uuid);
+        long next = safeAdd(previous, -amount);
+        balances.put(uuid, next);
+        balanceData.set(uuid.toString(), next);
+        balanceData.set(marker, true);
+        try { balanceData.save(balanceFile); }
+        catch (IOException ex) {
+            balances.put(uuid, previous);
+            balanceData.set(uuid.toString(), previous);
+            balanceData.set(marker, null);
+            getLogger().severe("Could not save Wanderer failure penalty for " + uuid + ": " + ex.getMessage());
+            return false;
+        }
+        Player player = getServer().getPlayer(uuid);
+        if (player != null) updateSidebar(player);
+        return true;
+    }
     void resetMarks(UUID uuid, String actor) {
         set(uuid, 0);
         audit("balance reset by " + actor + " target=" + uuid);
@@ -884,6 +928,7 @@ public final class mark extends JavaPlugin implements Listener {
     }
     String message(String message) { return color(message); }
     boolean isRelicDisabled(UUID uuid) { return relicEncounters != null && relicEncounters.isDisabled(uuid); }
+    boolean isRelicDisabled(UUID uuid, String ability) { return relicEncounters != null && relicEncounters.isDisabled(uuid, ability); }
 
     boolean opCooldownBypass(Player player) {
         return player.isOp() && getConfig().getBoolean("settings.opCooldownBypass", false);
@@ -948,8 +993,13 @@ public final class mark extends JavaPlugin implements Listener {
         if (player != null) updateSidebar(player);
     }
     private boolean persistBalance(UUID uuid, long amount) {
+        if (amount < 0) return false;
+        return persistBalanceAllowingDebt(uuid, amount);
+    }
+
+    private boolean persistBalanceAllowingDebt(UUID uuid, long amount) {
         long previous = balance(uuid);
-        if (amount < 0 || amount > MAX_BANK) return false;
+        if (amount > MAX_BANK) return false;
         balances.put(uuid, amount);
         balanceData.set(uuid.toString(), amount);
         try { balanceData.save(balanceFile); }

@@ -7,6 +7,7 @@ import org.bukkit.entity.Entity;
 import org.bukkit.entity.EntityType;
 import org.bukkit.entity.Player;
 import org.bukkit.entity.Villager;
+import org.bukkit.entity.Warden;
 import org.bukkit.event.EventHandler;
 import org.bukkit.event.Listener;
 import org.bukkit.event.block.BlockBreakEvent;
@@ -14,12 +15,17 @@ import org.bukkit.event.block.BlockExplodeEvent;
 import org.bukkit.event.entity.EntityExplodeEvent;
 import org.bukkit.event.entity.EntityDamageByEntityEvent;
 import org.bukkit.event.entity.EntityDeathEvent;
+import org.bukkit.event.entity.EntityPickupItemEvent;
 import org.bukkit.event.inventory.InventoryClickEvent;
+import org.bukkit.event.inventory.InventoryDragEvent;
+import org.bukkit.event.world.ChunkLoadEvent;
 import org.bukkit.event.player.PlayerInteractEntityEvent;
 import org.bukkit.event.player.PlayerInteractEvent;
-import org.bukkit.event.block.Action;
+import org.bukkit.event.player.PlayerRespawnEvent;
 import org.bukkit.inventory.ItemStack;
 import org.bukkit.inventory.MerchantRecipe;
+import org.bukkit.inventory.MerchantInventory;
+import org.bukkit.event.inventory.InventoryType;
 import org.bukkit.inventory.meta.ItemMeta;
 import org.bukkit.persistence.PersistentDataType;
 
@@ -35,17 +41,28 @@ import java.util.concurrent.ThreadLocalRandom;
 final class RelicEncounterService implements Listener {
     private final mark plugin;
     private final RelicService relics;
-    private final NamespacedKey villagerKey, questKey, shatterKey, villagerQuestTypeKey;
+    private final NamespacedKey villagerKey, questKey, shatterKey, shatterIdKey, shatterPaidKey, villagerQuestTypeKey, perfectOfferKey, punishmentWardenKey, uniqueHeartKey, waveKey;
     private final File stateFile;
     private final YamlConfiguration state;
-    private final Map<UUID, Integer> expiryTasks = new HashMap<>();
     private final Map<UUID, Quest> quests = new HashMap<>();
     private final Map<UUID, HuntQuest> huntQuests = new HashMap<>();
-    private final Map<UUID, Long> disabledUntil = new HashMap<>();
+    private final Map<UUID, Map<String, Long>> disabledRelics = new HashMap<>();
+    private final Map<UUID, Long> angelMarkedUntil = new HashMap<>();
+    private final Set<String> paidShatterIds = new HashSet<>();
+    private final Set<String> usedShatterIds = new HashSet<>();
     private final Set<UUID> swordUseLocks = new HashSet<>();
+    private final Set<UUID> punishmentDeathsProcessed = new HashSet<>();
     private final Set<String> claimedBoxes = new HashSet<>();
+    private final Map<UUID, Set<UUID>> angelDamagers = new HashMap<>();
+    private final Map<String, Integer> excludedTypes = new HashMap<>();
+    private String currentWaveId = "";
+    private long currentWaveExpiresAt;
+    private int waveExpiryTask = -1;
 
-    private record Quest(UUID owner, String world, int x, int y, int z, String type, boolean claimed) {
+    private record Quest(UUID owner, String world, int x, int y, int z, String type, boolean claimed, String heartId, long expiresAt) {
+        Quest(UUID owner, String world, int x, int y, int z, String type, boolean claimed) {
+            this(owner, world, x, y, z, type, claimed, "", 0L);
+        }
         String key() { return world + ":" + x + ":" + y + ":" + z; }
     }
 
@@ -59,9 +76,22 @@ final class RelicEncounterService implements Listener {
         villagerKey = new NamespacedKey(plugin, "relic_wave_villager");
         questKey = new NamespacedKey(plugin, "relic_quest_token");
         villagerQuestTypeKey = new NamespacedKey(plugin, "relic_villager_quest_type");
+        perfectOfferKey = new NamespacedKey(plugin, "angel_perfect_offer");
+        punishmentWardenKey = new NamespacedKey(plugin, "angel_punishment_warden");
+        uniqueHeartKey = new NamespacedKey(plugin, "wanderer_unique_heart");
+        waveKey = new NamespacedKey(plugin, "relic_wave_id");
         shatterKey = new NamespacedKey(plugin, "shatter_sword");
+        shatterIdKey = new NamespacedKey(plugin, "shatter_id");
+        shatterPaidKey = new NamespacedKey(plugin, "shatter_paid");
         stateFile = new File(plugin.getDataFolder(), "relic-encounters.yml");
         state = YamlConfiguration.loadConfiguration(stateFile);
+        paidShatterIds.addAll(state.getStringList("paid-shatter-swords"));
+        usedShatterIds.addAll(state.getStringList("used-shatter-swords"));
+        var exclusions = state.getConfigurationSection("excluded-angel-types");
+        if (exclusions != null) for (String type : exclusions.getKeys(false)) {
+            int waves = state.getInt("excluded-angel-types." + type, 0);
+            if (waves > 0 && List.of("crazy", "imperfect", "perfect", "ascendant", "wanderer").contains(type)) excludedTypes.put(type, Math.min(3, waves));
+        }
         claimedBoxes.addAll(state.getStringList("claimed-boxes"));
         for (String key : state.getConfigurationSection("quests") == null
                 ? Collections.<String>emptySet() : state.getConfigurationSection("quests").getKeys(false)) {
@@ -69,7 +99,8 @@ final class RelicEncounterService implements Listener {
             try {
                 Quest quest = new Quest(UUID.fromString(state.getString(path + ".owner")),
                         state.getString(path + ".world"), state.getInt(path + ".x"), state.getInt(path + ".y"),
-                        state.getInt(path + ".z"), state.getString(path + ".type", "nether"), state.getBoolean(path + ".claimed"));
+                        state.getInt(path + ".z"), state.getString(path + ".type", "nether"), state.getBoolean(path + ".claimed"),
+                        state.getString(path + ".heart-id", ""), state.getLong(path + ".expires-at", 0L));
                 quests.put(quest.owner(), quest);
             } catch (Exception ex) {
                 plugin.getLogger().warning("Ignoring malformed relic quest entry " + key);
@@ -87,15 +118,14 @@ final class RelicEncounterService implements Listener {
                 plugin.getLogger().warning("Ignoring malformed hunt quest entry " + key);
             }
         }
-        for (String key : state.getConfigurationSection("disabled") == null
-                ? Collections.<String>emptySet() : state.getConfigurationSection("disabled").getKeys(false)) {
-            try { disabledUntil.put(UUID.fromString(key), state.getLong("disabled." + key)); }
-            catch (IllegalArgumentException ignored) { }
-        }
+        // Shatter Sword disables are intentionally cleared on restart; an old timer must never strand a relic.
+        state.set("disabled", null);
     }
 
     void start() {
         // Start a wave on startup, then repeat at the configured interval (default one hour).
+        expireWandererQuests();
+        cleanupOldVillagers();
         long interval = Math.max(1, plugin.getConfig().getLong("relic-villagers.interval-minutes", 60)) * 60L * 20L;
         Bukkit.getScheduler().runTaskLater(plugin, this::spawnWave, 40L);
         Bukkit.getScheduler().runTaskTimer(plugin, this::spawnWave, interval, interval);
@@ -103,18 +133,40 @@ final class RelicEncounterService implements Listener {
     }
 
     void shutdown() {
-        for (Integer task : expiryTasks.values()) Bukkit.getScheduler().cancelTask(task);
-        expiryTasks.clear();
+        expireWandererQuests();
+        cleanupOldVillagers();
+        currentWaveId = "";
+        currentWaveExpiresAt = 0L;
         saveState();
     }
 
     void triggerManualWave() { spawnWave(); }
 
     private void spawnWave() {
+        if (currentWaveExpiresAt > 0L) {
+            currentWaveExpiresAt = 0L;
+            expireWandererQuests();
+        }
         cleanupOldVillagers();
-        int count = Math.max(1, plugin.getConfig().getInt("relic-villagers.batch-size", 8));
+        int count = 8;
         List<World> worlds = Bukkit.getWorlds();
         if (worlds.isEmpty()) return;
+        Set<String> excludedThisWave = new HashSet<>();
+        excludedTypes.forEach((type, waves) -> { if (waves > 0) excludedThisWave.add(type); });
+        List<String> eligibleTypes = new ArrayList<>(List.of("crazy", "imperfect", "perfect", "ascendant", "wanderer"));
+        eligibleTypes.removeAll(excludedThisWave);
+        if (eligibleTypes.isEmpty()) eligibleTypes.add("imperfect");
+        List<String> waveTypes = new ArrayList<>(eligibleTypes);
+        while (waveTypes.size() < count) waveTypes.add(eligibleTypes.get(ThreadLocalRandom.current().nextInt(eligibleTypes.size())));
+        Collections.shuffle(waveTypes);
+        List<Integer> imperfectSlots = new ArrayList<>();
+        for (int i = 0; i < waveTypes.size(); i++) if (waveTypes.get(i).equals("imperfect")) imperfectSlots.add(i);
+        Collections.shuffle(imperfectSlots);
+        // Nearest whole Angel count to 20%; ties round down (e.g. 2 Imperfect Angels => 0 bonus offers).
+        int bonusPerfectOffers = (int) Math.floor(imperfectSlots.size() * 0.20 + 0.5);
+        Set<Integer> bonusSlots = new HashSet<>(imperfectSlots.subList(0, Math.min(bonusPerfectOffers, imperfectSlots.size())));
+        String waveId = UUID.randomUUID().toString();
+        currentWaveId = waveId;
         int spawned = 0;
         for (int i = 0; i < count; i++) {
             SpawnPoint point = findStructureLocation(worlds);
@@ -133,34 +185,67 @@ final class RelicEncounterService implements Listener {
             villager.setPersistent(true);
             villager.setRemoveWhenFarAway(false);
             villager.getPersistentDataContainer().set(villagerKey, PersistentDataType.BYTE, (byte) 1);
-            // Four Angel variants: Crazy (quest-only), Ascendant and Perfect (traders), Wanderer (private cache quest).
-            int angelRoll = ThreadLocalRandom.current().nextInt(100);
-            String questType = angelRoll < 25 ? "crazy" : angelRoll < 50 ? "ascendant" : angelRoll < 75 ? "perfect" : "wanderer";
+            villager.getPersistentDataContainer().set(waveKey, PersistentDataType.STRING, waveId);
+            String questType = waveTypes.get(i);
             villager.getPersistentDataContainer().set(villagerQuestTypeKey, PersistentDataType.STRING, questType);
-            if (questType.equals("ascendant") || questType.equals("perfect")) {
-                villager.setRecipes(createTrades(point.structureName(), questType));
+            boolean bonusPerfect = questType.equals("imperfect") && bonusSlots.contains(i);
+            villager.getPersistentDataContainer().set(perfectOfferKey, PersistentDataType.BYTE, (byte) (bonusPerfect ? 1 : 0));
+            if (List.of("imperfect", "perfect", "ascendant", "wanderer").contains(questType)) {
+                villager.setRecipes(createTrades(point.structureName(), questType, bonusPerfect));
             } else {
                 villager.setRecipes(Collections.emptyList());
             }
-            long lifetime = Math.max(1, plugin.getConfig().getLong("relic-villagers.lifetime-minutes", 15)) * 60L * 20L;
-            int task = Bukkit.getScheduler().runTaskLater(plugin, () -> removeVillager(villager), lifetime).getTaskId();
-            expiryTasks.put(villager.getUniqueId(), task);
             spawned++;
         }
-        if (spawned > 0) Bukkit.broadcastMessage(plugin.message("&dAngels escaped"));
+        excludedTypes.replaceAll((type, waves) -> waves - 1);
+        excludedTypes.entrySet().removeIf(entry -> entry.getValue() <= 0);
+        saveExclusions();
+        if (spawned > 0) {
+            Bukkit.broadcastMessage(plugin.message("Angels escaped"));
+            long lifetime = 15L * 60 * 20;
+            currentWaveExpiresAt = System.currentTimeMillis() + 15L * 60 * 1000;
+            waveExpiryTask = Bukkit.getScheduler().runTaskLater(plugin, () -> expireWave(waveId), lifetime).getTaskId();
+        }
         plugin.getLogger().info("Spawned " + spawned + " relic villagers for this hourly wave.");
     }
 
+    private void expireWave(String waveId) {
+        if (!waveId.equals(currentWaveId)) return;
+        expireWandererQuests();
+        cleanupOldVillagers();
+        Bukkit.broadcastMessage(plugin.message("Escaped angels enchained"));
+        currentWaveExpiresAt = 0L;
+        currentWaveId = "";
+        waveExpiryTask = -1;
+    }
+
+    private void saveExclusions() {
+        state.set("excluded-angel-types", null);
+        excludedTypes.forEach((type, waves) -> state.set("excluded-angel-types." + type, waves));
+        saveState();
+    }
+
     private void cleanupOldVillagers() {
+        if (waveExpiryTask != -1) Bukkit.getScheduler().cancelTask(waveExpiryTask);
+        waveExpiryTask = -1;
         for (World world : Bukkit.getWorlds()) {
             for (Entity entity : world.getEntities()) {
                 if (entity instanceof Villager villager
                         && villager.getPersistentDataContainer().has(villagerKey, PersistentDataType.BYTE)) {
-                    Integer task = expiryTasks.remove(villager.getUniqueId());
-                    if (task != null) Bukkit.getScheduler().cancelTask(task);
                     villager.remove();
                 }
             }
+        }
+        angelDamagers.clear();
+    }
+
+    @EventHandler
+    public void onChunkLoad(ChunkLoadEvent event) {
+        for (Entity entity : event.getChunk().getEntities()) {
+            if (!(entity instanceof Villager villager)
+                    || !villager.getPersistentDataContainer().has(villagerKey, PersistentDataType.BYTE)) continue;
+            String id = villager.getPersistentDataContainer().getOrDefault(waveKey, PersistentDataType.STRING, "");
+            if (!id.equals(currentWaveId)) villager.remove();
         }
     }
 
@@ -225,29 +310,28 @@ final class RelicEncounterService implements Listener {
         return structures.get(structures.size() - 1);
     }
 
-    private List<MerchantRecipe> createTrades(String structureName, String angelType) {
+    private List<MerchantRecipe> createTrades(String structureName, String angelType, boolean bonusPerfect) {
         List<MerchantRecipe> recipes = new ArrayList<>();
-        // Each villager receives a fixed offer set once; reopening the trade screen cannot reroll it.
-        List<Integer> tiers = new ArrayList<>();
-        for (int i = 0; i < 3; i++) {
-            // Structure mapping influences the Ascendant Angel's fixed offer tier. Perfect Angels
-            // remain strictly Perfect-tier as specified.
-            tiers.add(angelType.equals("ascendant") ? Math.max(2, chooseTradeTier(structureName)) : 2);
-        }
+        // Generated once per villager; reopening the merchant screen does not reroll offers.
+        List<Integer> tiers = switch (angelType) {
+            case "imperfect" -> bonusPerfect ? List.of(1, 2) : List.of(1);
+            case "perfect" -> Collections.nCopies(ThreadLocalRandom.current().nextInt(2, 5), 2);
+            case "ascendant" -> List.of(1, 2, 3);
+            default -> List.of();
+        };
         String[] classes = {"vanguard", "phantom", "warden"};
-        for (int i = 0; i < 3; i++) {
+        for (int tier : tiers) {
             String clazz = classes[ThreadLocalRandom.current().nextInt(classes.length)];
-            int tier = tiers.get(i);
             String ability = relicAbility(clazz, tier);
             ItemStack output = relics.createRelic(clazz, ability, tier);
-            MerchantRecipe recipe = new MerchantRecipe(output, 0, 1, true);
+            MerchantRecipe recipe = new MerchantRecipe(output, 0, 999_999, true);
             recipe.addIngredient(new ItemStack(Material.EMERALD, tier == 1 ? 16 : 32));
             recipe.addIngredient(new ItemStack(Material.DIAMOND, tier == 1 ? 2 : 8));
             recipes.add(recipe);
         }
         if (angelType.equals("ascendant")) {
             ItemStack sword = createShatterSword();
-            MerchantRecipe swordRecipe = new MerchantRecipe(sword, 0, 1, true);
+            MerchantRecipe swordRecipe = new MerchantRecipe(sword, 0, 999_999, true);
             swordRecipe.addIngredient(new ItemStack(Material.DIAMOND, 16));
             swordRecipe.addIngredient(new ItemStack(Material.NETHERITE_INGOT, 1));
             recipes.add(swordRecipe);
@@ -271,21 +355,13 @@ final class RelicEncounterService implements Listener {
         ItemStack item = new ItemStack(Material.NETHERITE_SWORD);
         ItemMeta meta = item.getItemMeta();
         meta.setDisplayName(ChatColor.DARK_PURPLE + "Shatter Sword");
-        meta.setLore(List.of(ChatColor.GRAY + "One successful player hit only",
-                ChatColor.GRAY + "Costs 500 Marks on activation",
-                ChatColor.GRAY + "Disables one relic ability for 30 minutes"));
+        String identity = UUID.randomUUID().toString();
+        meta.setLore(List.of(ChatColor.GRAY + "Prepaid on first acquisition (500 Marks)",
+                ChatColor.GRAY + "Disables one highest-tier eligible relic for 30 minutes"));
         meta.getPersistentDataContainer().set(shatterKey, PersistentDataType.BYTE, (byte) 1);
+        meta.getPersistentDataContainer().set(shatterIdKey, PersistentDataType.STRING, identity);
         item.setItemMeta(meta);
         return item;
-    }
-
-    private void removeVillager(Villager villager) {
-        expiryTasks.remove(villager.getUniqueId());
-        if (!villager.isValid()) return;
-        villager.getWorld().spawnParticle(Particle.SMOKE, villager.getLocation().add(0, 1, 0), 18, 0.35, 0.6, 0.35, 0.02);
-        villager.getWorld().playSound(villager.getLocation(), Sound.ENTITY_VILLAGER_DEATH, 1.0f, 0.75f);
-        villager.remove();
-        Bukkit.broadcastMessage(plugin.message("&5Escaped angels enchained"));
     }
 
     @EventHandler(ignoreCancelled = true)
@@ -293,72 +369,283 @@ final class RelicEncounterService implements Listener {
         if (!(event.getRightClicked() instanceof Villager villager)
                 || !villager.getPersistentDataContainer().has(villagerKey, PersistentDataType.BYTE)) return;
         String type = villager.getPersistentDataContainer().getOrDefault(villagerQuestTypeKey, PersistentDataType.STRING, "crazy");
-        if (type.equals("crazy")) event.getPlayer().sendMessage(plugin.message("&cCrazy Angel: left-click to receive a timed quest."));
-        else if (type.equals("wanderer")) event.getPlayer().sendMessage(plugin.message("&dWanderer Angel: left-click to receive your private cache quest."));
-        else event.getPlayer().sendMessage(plugin.message("&eLeft-click for Angel details; right-click to trade."));
+        if (type.equals("crazy")) event.getPlayer().sendMessage(plugin.message("&cCrazy Angel: left-click to receive a persistent quest."));
+        else if (type.equals("wanderer")) {
+            event.setCancelled(true);
+            if (submitWandererHeart(event.getPlayer())) return;
+            event.getPlayer().sendMessage(plugin.message("&dWanderer Angel: left-click to start a cache quest; submit its unique Heart here."));
+        }
+        else event.getPlayer().sendMessage(plugin.message("&e" + capitalize(type) + " Angel: left-click for details; right-click to trade."));
+        if (type.equals("crazy")) event.setCancelled(true);
     }
 
     @EventHandler(ignoreCancelled = true)
     public void onVillagerLeftClick(EntityDamageByEntityEvent event) {
         if (!(event.getDamager() instanceof Player player) || !(event.getEntity() instanceof Villager villager)
                 || !villager.getPersistentDataContainer().has(villagerKey, PersistentDataType.BYTE)) return;
-        event.setCancelled(true);
         String type = villager.getPersistentDataContainer().getOrDefault(villagerQuestTypeKey, PersistentDataType.STRING, "crazy");
         if (type.equals("crazy")) startCrazyQuest(player);
         else if (type.equals("wanderer")) startWandererQuest(player);
-        else player.sendMessage(plugin.message(type.equals("ascendant")
-                ? "&6Ascendant Angel: trade for high-tier relics by right-clicking me."
-                : "&bPerfect Angel: trade for Perfect relics by right-clicking me."));
-    }
-
-
-    @EventHandler(priority = org.bukkit.event.EventPriority.HIGHEST)
-    public void onAngelInvulnerable(org.bukkit.event.entity.EntityDamageEvent event) {
-        if (event.getEntity() instanceof Villager villager
-                && villager.getPersistentDataContainer().has(villagerKey, PersistentDataType.BYTE)) {
-            event.setCancelled(true);
-        }
+        else player.sendMessage(plugin.message("&e" + capitalize(type) + " Angel: right-click to trade."));
     }
 
     @EventHandler(ignoreCancelled = true)
-    public void onWandererCacheInteract(PlayerInteractEvent event) {
-        if (event.getAction() != Action.RIGHT_CLICK_BLOCK || event.getClickedBlock() == null) return;
-        Block block = event.getClickedBlock();
-        if (!(block.getState() instanceof org.bukkit.block.ShulkerBox)) return;
-        String key = block.getWorld().getName() + ":" + block.getX() + ":" + block.getY() + ":" + block.getZ();
-        Quest quest = quests.values().stream().filter(q -> q.key().equals(key) && !q.claimed()).findFirst().orElse(null);
-        if (quest == null) return;
-        Player player = event.getPlayer();
+    public void onAngelDamaged(EntityDamageByEntityEvent event) {
+        if (!(event.getEntity() instanceof Villager angel)
+                || !angel.getPersistentDataContainer().has(villagerKey, PersistentDataType.BYTE)) return;
+        Player player = playerDamager(event);
+        if (player != null) angelDamagers.computeIfAbsent(angel.getUniqueId(), ignored -> new HashSet<>()).add(player.getUniqueId());
+    }
+
+    @EventHandler(ignoreCancelled = true)
+    public void onShatterSwordPickup(EntityPickupItemEvent event) {
+        if (!(event.getEntity() instanceof Player player)) return;
+        ItemStack item = event.getItem().getItemStack();
+        if (!isShatterSword(item)) return;
+        if (!payForShatterSword(player, item)) event.setCancelled(true);
+    }
+
+    @EventHandler(ignoreCancelled = true)
+    public void onShatterSwordDrag(InventoryDragEvent event) {
+        if (isShatterSword(event.getOldCursor())) event.setCancelled(true);
+    }
+
+    @EventHandler(ignoreCancelled = true)
+    public void onShatterSwordContainerTake(InventoryClickEvent event) {
+        if (!(event.getWhoClicked() instanceof Player player)) return;
+        if (event.getView().getType() == InventoryType.MERCHANT) {
+            purchaseShatterSwordFromMerchant(event, player);
+            return;
+        }
+        if (event.getClickedInventory() == null
+                || event.getClickedInventory().equals(player.getInventory())) return;
+        ItemStack source = event.getCurrentItem();
+        if (!isShatterSword(source)) return;
         event.setCancelled(true);
-        if (!quest.owner().equals(player.getUniqueId())) {
-            player.sendMessage(plugin.message("&cThis angelic cache belongs to another player."));
+        if (!payForShatterSword(player, source)) return;
+        ItemStack acquired = source.clone();
+        acquired.setAmount(1);
+        HashMap<Integer, ItemStack> overflow = player.getInventory().addItem(acquired);
+        if (!overflow.isEmpty()) {
+            // A failed delivery must not charge. Restore the source sword and roll back payment.
+            source.setItemMeta(event.getCurrentItem().getItemMeta());
+            refundShatterAcquisition(player, source);
             return;
         }
-        org.bukkit.block.ShulkerBox box = (org.bukkit.block.ShulkerBox) block.getState();
-        org.bukkit.inventory.Inventory inventory = box.getInventory();
-        boolean hasHeart = Arrays.stream(inventory.getContents()).filter(Objects::nonNull)
-                .anyMatch(item -> item.getType() == Material.HEART_OF_THE_SEA);
-        if (!hasHeart) {
-            player.sendMessage(plugin.message("&dThe Wanderer requires a Heart of the Sea inside this box."));
+        if (source.getAmount() <= 1) event.setCurrentItem(null);
+        else source.setAmount(source.getAmount() - 1);
+    }
+
+    private void purchaseShatterSwordFromMerchant(InventoryClickEvent event, Player player) {
+        if (event.getRawSlot() != 2 || !(event.getView().getTopInventory() instanceof MerchantInventory merchant)) return;
+        ItemStack output = merchant.getItem(2);
+        if (!isShatterSword(output)) return;
+        event.setCancelled(true);
+        MerchantRecipe recipe = merchant.getSelectedRecipe();
+        if (recipe == null || player.getInventory().firstEmpty() < 0) return;
+        List<ItemStack> required = recipe.getIngredients();
+        for (int i = 0; i < required.size() && i < 2; i++) {
+            ItemStack have = merchant.getItem(i);
+            ItemStack need = required.get(i);
+            if (have == null || have.getType() != need.getType() || have.getAmount() < need.getAmount()) return;
+        }
+        if (!plugin.debit(player.getUniqueId(), 500)) {
+            player.sendMessage(plugin.message("&cA Shatter Sword costs 500 Marks on acquisition."));
             return;
         }
-        boolean removed = false;
-        for (int i = 0; i < inventory.getSize(); i++) {
-            ItemStack item = inventory.getItem(i);
-            if (item != null && item.getType() == Material.HEART_OF_THE_SEA) {
-                item.setAmount(item.getAmount() - 1);
-                if (item.getAmount() <= 0) inventory.setItem(i, null);
-                removed = true;
-                break;
+        for (int i = 0; i < required.size() && i < 2; i++) {
+            ItemStack have = merchant.getItem(i);
+            have.setAmount(have.getAmount() - required.get(i).getAmount());
+            merchant.setItem(i, have.getAmount() == 0 ? null : have);
+        }
+        ItemStack delivered = output.clone();
+        ItemMeta meta = delivered.getItemMeta();
+        String id = UUID.randomUUID().toString();
+        meta.getPersistentDataContainer().set(shatterIdKey, PersistentDataType.STRING, id);
+        meta.getPersistentDataContainer().set(shatterPaidKey, PersistentDataType.BYTE, (byte) 1);
+        delivered.setItemMeta(meta);
+        paidShatterIds.add(id);
+        if (!saveState()) {
+            paidShatterIds.remove(id);
+            plugin.deposit(player.getUniqueId(), 500);
+            for (int i = 0; i < required.size() && i < 2; i++) {
+                ItemStack have = merchant.getItem(i);
+                ItemStack need = required.get(i);
+                if (have == null) merchant.setItem(i, need.clone());
+                else if (have.getType() == need.getType()) have.setAmount(have.getAmount() + need.getAmount());
             }
+            player.sendMessage(plugin.message("&cThe Shatter Sword payment could not be saved; the trade was rolled back."));
+            return;
         }
-        if (!removed || !claimedBoxes.add(key)) return;
-        Quest completed = new Quest(quest.owner(), quest.world(), quest.x(), quest.y(), quest.z(), quest.type(), true);
+        player.getInventory().addItem(delivered);
+        player.updateInventory();
+    }
+
+    private boolean isShatterSword(ItemStack item) {
+        return item != null && item.hasItemMeta()
+                && item.getItemMeta().getPersistentDataContainer().has(shatterKey, PersistentDataType.BYTE);
+    }
+
+    private boolean payForShatterSword(Player player, ItemStack item) {
+        if (!isShatterSword(item)) return true;
+        ItemMeta meta = item.getItemMeta();
+        var pdc = meta.getPersistentDataContainer();
+        String id = pdc.get(shatterIdKey, PersistentDataType.STRING);
+        if (id == null || id.isBlank()) return false;
+        if (paidShatterIds.contains(id)) {
+            pdc.set(shatterPaidKey, PersistentDataType.BYTE, (byte) 1);
+            item.setItemMeta(meta);
+            return true;
+        }
+        if (!plugin.debit(player.getUniqueId(), 500)) {
+            player.sendMessage(plugin.message("&cA Shatter Sword costs 500 Marks on first acquisition."));
+            return false;
+        }
+        paidShatterIds.add(id);
+        pdc.set(shatterPaidKey, PersistentDataType.BYTE, (byte) 1);
+        item.setItemMeta(meta);
+        if (!saveState()) {
+            paidShatterIds.remove(id);
+            plugin.deposit(player.getUniqueId(), 500);
+            pdc.remove(shatterPaidKey);
+            item.setItemMeta(meta);
+            return false;
+        }
+        plugin.audit("Shatter Sword prepaid acquisition id=" + id + " player=" + player.getUniqueId());
+        return true;
+    }
+
+    private void refundShatterAcquisition(Player player, ItemStack item) {
+        String id = item.getItemMeta().getPersistentDataContainer().get(shatterIdKey, PersistentDataType.STRING);
+        if (id != null && paidShatterIds.remove(id)) {
+            plugin.deposit(player.getUniqueId(), 500);
+            item.getItemMeta().getPersistentDataContainer().remove(shatterPaidKey);
+            saveState();
+        }
+    }
+
+    @EventHandler
+    public void onPunishmentWardenKill(EntityDeathEvent event) {
+        if (event.getEntity() instanceof Villager angel
+                && angel.getPersistentDataContainer().has(villagerKey, PersistentDataType.BYTE)) {
+            Set<UUID> attackers = angelDamagers.remove(angel.getUniqueId());
+            String type = angel.getPersistentDataContainer().getOrDefault(villagerQuestTypeKey, PersistentDataType.STRING, "imperfect");
+            excludedTypes.put(type, 3);
+            saveExclusions();
+            if (attackers != null) for (UUID attacker : attackers) {
+                if (plugin.deductUpTo(attacker, 1_000)) plugin.audit("Angel kill penalty 1000 Marks target=" + attacker + " angel=" + angel.getUniqueId());
+            }
+            Player killer = playerDamager(angel.getLastDamageCause() instanceof EntityDamageByEntityEvent hit ? hit : null);
+            if (killer == null) killer = angel.getKiller();
+            if (killer != null) {
+                long until = System.currentTimeMillis() + 30L * 60 * 1000;
+                angelMarkedUntil.merge(killer.getUniqueId(), until, Math::max);
+                Location spawnAt = killer.getLocation();
+                for (int i = 0; i < 3; i++) {
+                    Location point = spawnAt.clone().add((i - 1) * 2.0, 0, 1.5);
+                    Warden warden = (Warden) spawnAt.getWorld().spawnEntity(point, EntityType.WARDEN);
+                    warden.getPersistentDataContainer().set(punishmentWardenKey, PersistentDataType.BYTE, (byte) 1);
+                    warden.setTarget(killer);
+                    warden.setPersistent(true);
+                    warden.setRemoveWhenFarAway(false);
+                }
+                killer.sendMessage(plugin.message("&cThe Angels mark you. Three Wardens are hunting you."));
+            }
+            saveState();
+            return;
+        }
+        if (!(event.getEntity() instanceof Player victim)) return;
+        if (!punishmentDeathsProcessed.add(victim.getUniqueId())) return;
+        EntityDamageByEntityEvent lastHit = victim.getLastDamageCause() instanceof EntityDamageByEntityEvent hit ? hit : null;
+        if (lastHit == null || !(lastHit.getDamager() instanceof Warden warden)
+                || !warden.getPersistentDataContainer().has(punishmentWardenKey, PersistentDataType.BYTE)) return;
+        int removed = relics.removeGenuineRelics(victim);
+        victim.sendMessage(plugin.message("&4A punishment Warden destroyed " + removed + " genuine relic item(s) and all applied relic tiers."));
+        plugin.audit("Tracked Angel punishment Warden deleted " + removed + " carried genuine relics and applied relic tiers from " + victim.getUniqueId());
+    }
+
+    @EventHandler
+    public void clearPunishmentDeathGuard(PlayerRespawnEvent event) {
+        punishmentDeathsProcessed.remove(event.getPlayer().getUniqueId());
+    }
+
+    private Player playerDamager(EntityDamageByEntityEvent event) {
+        if (event == null) return null;
+        Entity damager = event.getDamager();
+        if (damager instanceof Player player) return player;
+        if (damager instanceof org.bukkit.entity.Projectile projectile && projectile.getShooter() instanceof Player player) return player;
+        if (damager instanceof org.bukkit.entity.TNTPrimed tnt && tnt.getSource() instanceof Player player) return player;
+        return null;
+    }
+
+    private List<ItemStack> createWandererCacheContents(Player owner, String heartId) {
+        List<ItemStack> contents = new ArrayList<>();
+        ItemStack heart = new ItemStack(Material.HEART_OF_THE_SEA);
+        ItemMeta meta = heart.getItemMeta();
+        meta.setDisplayName(ChatColor.AQUA + "Wanderer's Heart");
+        meta.setLore(List.of(ChatColor.GRAY + "Unique quest item. Return it to the Wanderer."));
+        meta.getPersistentDataContainer().set(uniqueHeartKey, PersistentDataType.STRING, heartId);
+        heart.setItemMeta(meta);
+        contents.add(heart);
+        String clazz = plugin.selectedClass(owner.getUniqueId());
+        if (!List.of("vanguard", "phantom", "warden").contains(clazz)) clazz = randomClass();
+        contents.add(relics.createRelic(clazz, relicAbility(clazz, 2), 2));
+        contents.add(randomReward("wanderer"));
+        contents.add(randomReward("wanderer"));
+        if (ThreadLocalRandom.current().nextDouble() < 0.20) {
+            String ascendantClass = randomClass();
+            contents.add(relics.createRelic(ascendantClass, relicAbility(ascendantClass, 3), 3));
+        }
+        return contents;
+    }
+
+    private boolean submitWandererHeart(Player player) {
+        Quest quest = quests.get(player.getUniqueId());
+        if (quest == null || quest.claimed() || !quest.type().equals("wanderer")) return false;
+        ItemStack hand = player.getInventory().getItemInMainHand();
+        boolean mainHand = hasQuestHeart(hand, quest.heartId());
+        if (!mainHand) hand = player.getInventory().getItemInOffHand();
+        if (!hasQuestHeart(hand, quest.heartId())) return false;
+        if (hand.getAmount() > 1) hand.setAmount(hand.getAmount() - 1);
+        else if (mainHand) player.getInventory().setItemInMainHand(null);
+        else player.getInventory().setItemInOffHand(null);
+        Quest completed = new Quest(quest.owner(), quest.world(), quest.x(), quest.y(), quest.z(), quest.type(), true, quest.heartId(), quest.expiresAt());
         quests.put(quest.owner(), completed);
         saveQuest(completed);
-        deliverRewards(player, quest.type());
-        block.setType(Material.AIR, false);
-        player.sendMessage(plugin.message("&aWanderer quest complete! The Heart of the Sea has been accepted."));
+        removeQuestBlock(quest);
+        long reward = ThreadLocalRandom.current().nextLong(400, 501);
+        plugin.credit(player.getUniqueId(), reward, "Wanderer cache quest reward");
+        player.sendMessage(plugin.message("&aWanderer quest complete. You received " + reward + " Marks."));
+        return true;
+    }
+
+    private boolean hasQuestHeart(ItemStack item, String heartId) {
+        return item != null && item.getType() == Material.HEART_OF_THE_SEA && item.hasItemMeta()
+                && heartId != null && !heartId.isBlank()
+                && heartId.equals(item.getItemMeta().getPersistentDataContainer().get(uniqueHeartKey, PersistentDataType.STRING));
+    }
+
+    private void expireWandererQuests() {
+        for (Quest quest : new ArrayList<>(quests.values())) {
+            if (quest.claimed() || !quest.type().equals("wanderer")) continue;
+            Quest failed = new Quest(quest.owner(), quest.world(), quest.x(), quest.y(), quest.z(), quest.type(), true, quest.heartId(), quest.expiresAt());
+            quests.put(quest.owner(), failed);
+            saveQuest(failed);
+            removeQuestBlock(quest);
+            plugin.applyWandererFailurePenalty(quest.owner(), 500, quest.heartId().isBlank() ? quest.owner() + ":" + quest.key() : quest.heartId());
+            Player player = Bukkit.getPlayer(quest.owner());
+            if (player != null) player.sendMessage(plugin.message("&cYour Wanderer quest expired. 500 Marks were deducted."));
+        }
+    }
+
+    private void removeQuestBlock(Quest quest) {
+        World world = Bukkit.getWorld(quest.world());
+        if (world == null) return;
+        world.getChunkAt(quest.x() >> 4, quest.z() >> 4).load();
+        Block block = world.getBlockAt(quest.x(), quest.y(), quest.z());
+        if (block.getType() != Material.SHULKER_BOX || !(block.getState() instanceof org.bukkit.block.ShulkerBox box)) return;
+        String cacheId = box.getPersistentDataContainer().get(questKey, PersistentDataType.STRING);
+        if (quest.heartId().equals(cacheId)) block.setType(Material.AIR, false);
     }
 
     private boolean hasActiveQuest(UUID owner) {
@@ -376,40 +663,39 @@ final class RelicEncounterService implements Listener {
             HuntQuest quest = new HuntQuest(player.getUniqueId(), "WARDEN", 1, 0, 8, ThreadLocalRandom.current().nextLong(500, 1251));
             huntQuests.put(player.getUniqueId(), quest);
             saveHuntQuest(quest);
-            player.sendMessage(plugin.message("&cCrazy Angel: Defeat a Warden within 15 minutes! Reward: 8 diamonds and a Marks bonus."));
+            player.sendMessage(plugin.message("&cCrazy Angel: Defeat a Warden. Reward: 8 diamonds and a Marks bonus."));
         } else if (roll == 1) {
             HuntQuest quest = new HuntQuest(player.getUniqueId(), "CREEPER", 5, 0, 5, ThreadLocalRandom.current().nextLong(500, 1251));
             huntQuests.put(player.getUniqueId(), quest);
             saveHuntQuest(quest);
-            player.sendMessage(plugin.message("&cCrazy Angel: Defeat 5 Creepers within 15 minutes! Reward: diamonds and Marks."));
+            player.sendMessage(plugin.message("&cCrazy Angel: Defeat 5 Creepers. Reward: diamonds and Marks."));
         } else if (roll == 2) {
             HuntQuest quest = new HuntQuest(player.getUniqueId(), "SKELETON", 8, 0, 4, 0);
             huntQuests.put(player.getUniqueId(), quest);
             saveHuntQuest(quest);
-            player.sendMessage(plugin.message("&cCrazy Angel: Defeat 8 Skeletons within 15 minutes! Reward: a custom Angel Fragment."));
+            player.sendMessage(plugin.message("&cCrazy Angel: Defeat 8 Skeletons. Reward: a custom Angel Fragment."));
         } else {
             HuntQuest quest = new HuntQuest(player.getUniqueId(), "PILLAGER", 6, 0, 6, ThreadLocalRandom.current().nextLong(500, 1251));
             huntQuests.put(player.getUniqueId(), quest);
             saveHuntQuest(quest);
-            player.sendMessage(plugin.message("&cCrazy Angel: Defeat 6 Pillagers within 15 minutes! Reward: diamonds and Marks."));
+            player.sendMessage(plugin.message("&cCrazy Angel: Defeat 6 Pillagers. Reward: diamonds and Marks."));
         }
-        HuntQuest scheduledQuest = huntQuests.get(player.getUniqueId());
-        Bukkit.getScheduler().runTaskLater(plugin, () -> {
-            HuntQuest active = huntQuests.get(player.getUniqueId());
-            if (active != null && active.equals(scheduledQuest)) {
-                huntQuests.remove(player.getUniqueId());
-                state.set("hunt-quests." + player.getUniqueId(), null);
-                saveState();
-                if (player.isOnline()) player.sendMessage(plugin.message("&cCrazy Angel quest expired."));
-            }
-        }, 15L * 60 * 20);
+        // Crazy quests are independent of the Angel wave and persist until completion.
     }
 
     private void startWandererQuest(Player player) {
-        if (hasActiveQuest(player.getUniqueId())) {
-            player.sendMessage(plugin.message("&cFinish your current angelic quest first."));
+        Quest existing = quests.get(player.getUniqueId());
+        if (existing != null && !existing.claimed() && existing.type().equals("wanderer")) {
+            player.sendMessage(plugin.message("&cYou already have an active Wanderer cache quest."));
             return;
         }
+        if (hasActiveQuest(player.getUniqueId())) { player.sendMessage(plugin.message("&cFinish your current angelic quest first.")); return; }
+        String selectedClass = plugin.selectedClass(player.getUniqueId());
+        if (selectedClass == null || !List.of("vanguard", "phantom", "warden").contains(selectedClass)) {
+            player.sendMessage(plugin.message("&cChoose a class before accepting a Wanderer cache quest."));
+            return;
+        }
+        if (currentWaveExpiresAt <= System.currentTimeMillis()) { player.sendMessage(plugin.message("&cThis Angel wave is ending; try again in the next wave.")); return; }
         World world = player.getWorld();
         Location origin = player.getLocation();
         Location chosen = null;
@@ -433,10 +719,22 @@ final class RelicEncounterService implements Listener {
         }
         chosen.getChunk().load();
         chosen.getBlock().setType(Material.SHULKER_BOX, false);
-        Quest quest = new Quest(player.getUniqueId(), world.getName(), chosen.getBlockX(), chosen.getBlockY(), chosen.getBlockZ(), "wanderer", false);
+        Location cacheLocation = chosen;
+        String heartId = UUID.randomUUID().toString();
+        long expiresAt = currentWaveExpiresAt;
+        Quest quest = new Quest(player.getUniqueId(), world.getName(), chosen.getBlockX(), chosen.getBlockY(), chosen.getBlockZ(), "wanderer", false, heartId, expiresAt);
         quests.put(player.getUniqueId(), quest);
+        if (chosen.getBlock().getState() instanceof org.bukkit.block.ShulkerBox box) {
+            List<ItemStack> contents = createWandererCacheContents(player, heartId);
+            for (ItemStack item : contents) {
+                Map<Integer, ItemStack> overflow = box.getInventory().addItem(item);
+                for (ItemStack stack : overflow.values()) world.dropItemNaturally(cacheLocation, stack);
+            }
+            box.getPersistentDataContainer().set(questKey, PersistentDataType.STRING, heartId);
+            box.update(true, false);
+        }
         saveQuest(quest);
-        player.sendMessage(plugin.message("&dWanderer quest accepted! A private cache spawned within 100 blocks. Place a Heart of the Sea inside the shulker box at &f"
+        player.sendMessage(plugin.message("&dWanderer quest accepted! A cache spawned within 100 blocks. Retrieve its unique Heart of the Sea and submit it at the Wanderer. Cache at &f"
                 + quest.x() + ", " + quest.y() + ", " + quest.z() + " &7(" + quest.world() + ")"));
         player.playSound(player.getLocation(), Sound.ENTITY_VILLAGER_YES, 0.8f, 1.2f);
     }
@@ -538,6 +836,8 @@ final class RelicEncounterService implements Listener {
         state.set(path + ".z", quest.z());
         state.set(path + ".type", quest.type());
         state.set(path + ".claimed", quest.claimed());
+        state.set(path + ".heart-id", quest.heartId());
+        state.set(path + ".expires-at", quest.expiresAt());
         saveState();
     }
 
@@ -547,7 +847,7 @@ final class RelicEncounterService implements Listener {
         String key = block.getWorld().getName() + ":" + block.getX() + ":" + block.getY() + ":" + block.getZ();
         Quest quest = quests.values().stream().filter(q -> q.key().equals(key) && !q.claimed()).findFirst().orElse(null);
         if (quest == null) return;
-        if (quest.type().equals("wanderer")) { event.setCancelled(true); return; }
+        if (quest.type().equals("wanderer")) return;
         Player player = event.getPlayer();
         if (!quest.owner().equals(player.getUniqueId())) {
             event.setCancelled(true);
@@ -580,7 +880,7 @@ final class RelicEncounterService implements Listener {
 
     private boolean isQuestCache(String world, int x, int y, int z) {
         String key = world + ":" + x + ":" + y + ":" + z;
-        return quests.values().stream().anyMatch(quest -> !quest.claimed() && quest.key().equals(key));
+        return quests.values().stream().anyMatch(quest -> !quest.claimed() && !quest.type().equals("wanderer") && quest.key().equals(key));
     }
 
     private void deliverRewards(Player player, String type) {
@@ -603,6 +903,11 @@ final class RelicEncounterService implements Listener {
         return "class_relic";
     }
 
+    private String capitalize(String value) {
+        if (value == null || value.isBlank()) return "Angel";
+        return value.substring(0, 1).toUpperCase(Locale.ROOT) + value.substring(1).toLowerCase(Locale.ROOT);
+    }
+
     private String randomClass() {
         return List.of("vanguard", "phantom", "warden").get(ThreadLocalRandom.current().nextInt(3));
     }
@@ -622,51 +927,79 @@ final class RelicEncounterService implements Listener {
         }
         if (roll < 65) return new ItemStack(Material.DIAMOND, ThreadLocalRandom.current().nextInt(2, 9));
         if (roll < 82) return new ItemStack(Material.GOLD_INGOT, ThreadLocalRandom.current().nextInt(8, 25));
-        if (roll < 94) return new ItemStack(Material.ENCHANTED_GOLDEN_APPLE, 1);
-        return new ItemStack(Material.NETHERITE_INGOT, 1);
+        if (roll < 88) return new ItemStack(Material.ENCHANTED_GOLDEN_APPLE, 1);
+        if (roll < 93) return new ItemStack(Material.GOLDEN_APPLE, ThreadLocalRandom.current().nextInt(1, 4));
+        if (roll < 97) return new ItemStack(Material.TOTEM_OF_UNDYING, 1);
+        return new ItemStack(Material.ANCIENT_DEBRIS, ThreadLocalRandom.current().nextInt(1, 3));
     }
 
-    @EventHandler(ignoreCancelled = true)
+    @EventHandler(priority = org.bukkit.event.EventPriority.HIGHEST, ignoreCancelled = true)
     public void onShatterHit(EntityDamageByEntityEvent event) {
         if (!(event.getDamager() instanceof Player attacker) || !(event.getEntity() instanceof Player target)) return;
         ItemStack weapon = attacker.getInventory().getItemInMainHand();
-        if (!weapon.hasItemMeta() || !weapon.getItemMeta().getPersistentDataContainer().has(shatterKey, PersistentDataType.BYTE)) return;
+        if (!isShatterSword(weapon)) return;
+        String swordId = weapon.getItemMeta().getPersistentDataContainer().get(shatterIdKey, PersistentDataType.STRING);
+        if (swordId == null || !paidShatterIds.contains(swordId) || usedShatterIds.contains(swordId)) return;
         if (event.getFinalDamage() <= 0 || swordUseLocks.contains(attacker.getUniqueId())) return;
-        if (!plugin.debit(attacker.getUniqueId(), 500)) {
-            event.setCancelled(true);
-            attacker.sendMessage(plugin.message("&cShatter Sword activation requires 500 Marks."));
+        List<RelicService.EligibleRelic> eligible = relics.highestTierRelics(target);
+        if (eligible.isEmpty()) {
+            target.getWorld().strikeLightningEffect(target.getLocation());
+            attacker.sendMessage(plugin.message("&7No eligible relic was found; the Shatter Sword remains intact."));
             return;
         }
         swordUseLocks.add(attacker.getUniqueId());
+        RelicService.EligibleRelic selected = eligible.get(ThreadLocalRandom.current().nextInt(eligible.size()));
+        usedShatterIds.add(swordId);
+        if (!saveState()) {
+            usedShatterIds.remove(swordId);
+            swordUseLocks.remove(attacker.getUniqueId());
+            attacker.sendMessage(plugin.message("&cThe Shatter Sword effect could not be saved; your sword was retained."));
+            return;
+        }
         weapon.setAmount(weapon.getAmount() - 1);
-        target.getWorld().strikeLightning(target.getLocation());
-        long until = System.currentTimeMillis() + 30L * 60 * 1000;
-        disabledUntil.put(target.getUniqueId(), until);
-        state.set("disabled." + target.getUniqueId(), until);
-        saveState();
-        attacker.sendMessage(plugin.message("&dShatter Sword consumed. 500 Marks paid."));
-        target.sendMessage(plugin.message("&5Your class abilities have been shattered for 30 minutes."));
+        target.getWorld().strikeLightningEffect(target.getLocation());
+        long expires = System.currentTimeMillis() + 30L * 60 * 1000;
+        disabledRelics.computeIfAbsent(target.getUniqueId(), ignored -> new HashMap<>())
+                .put(selected.clazz() + ":" + selected.ability(), expires);
+        Bukkit.getScheduler().runTaskLater(plugin, () -> restoreRelic(target.getUniqueId(), selected, expires), 30L * 60 * 20);
+        attacker.sendMessage(plugin.message("&dShatter Sword consumed; " + selected.ability() + " was disabled for 30 minutes."));
+        target.sendMessage(plugin.message("&5Your " + selected.ability() + " relic was disabled for 30 minutes."));
         Bukkit.getScheduler().runTaskLater(plugin, () -> swordUseLocks.remove(attacker.getUniqueId()), 1L);
     }
 
-    boolean isDisabled(UUID playerId) { return disabledUntil.getOrDefault(playerId, 0L) > System.currentTimeMillis(); }
+    private void restoreRelic(UUID playerId, RelicService.EligibleRelic selected, long expires) {
+        Map<String, Long> disabled = disabledRelics.get(playerId);
+        String key = selected.clazz() + ":" + selected.ability();
+        if (disabled == null || !java.util.Objects.equals(disabled.get(key), expires)) return;
+        disabled.remove(key);
+        if (disabled.isEmpty()) disabledRelics.remove(playerId);
+        Player player = Bukkit.getPlayer(playerId);
+        if (player != null) player.sendMessage(plugin.message("&aYour " + selected.ability() + " relic is restored."));
+    }
+
+    boolean isDisabled(UUID playerId, String ability) {
+        long now = System.currentTimeMillis();
+        String clazz = plugin.selectedClass(playerId);
+        return angelMarkedUntil.getOrDefault(playerId, 0L) > now
+                || clazz != null && disabledRelics.getOrDefault(playerId, Map.of())
+                .getOrDefault(clazz + ":" + ability, 0L) > now;
+    }
+
+    boolean isDisabled(UUID playerId) { return angelMarkedUntil.getOrDefault(playerId, 0L) > System.currentTimeMillis(); }
 
     private void expireOldDisables() {
         long now = System.currentTimeMillis();
-        for (UUID id : new ArrayList<>(disabledUntil.keySet())) {
-            if (disabledUntil.get(id) <= now) {
-                disabledUntil.remove(id);
-                state.set("disabled." + id, null);
-                Player player = Bukkit.getPlayer(id);
-                if (player != null) player.sendMessage(plugin.message("&aYour class abilities have been restored."));
-            }
-        }
+        disabledRelics.values().forEach(map -> map.entrySet().removeIf(entry -> entry.getValue() <= now));
+        disabledRelics.entrySet().removeIf(entry -> entry.getValue().isEmpty());
+        angelMarkedUntil.entrySet().removeIf(entry -> entry.getValue() <= now);
         saveState();
     }
 
-    private void saveState() {
+    private boolean saveState() {
         state.set("claimed-boxes", new ArrayList<>(claimedBoxes));
-        try { state.save(stateFile); }
-        catch (IOException ex) { plugin.getLogger().severe("Could not persist relic encounter state: " + ex.getMessage()); }
+        state.set("paid-shatter-swords", new ArrayList<>(paidShatterIds));
+        state.set("used-shatter-swords", new ArrayList<>(usedShatterIds));
+        try { state.save(stateFile); return true; }
+        catch (IOException ex) { plugin.getLogger().severe("Could not persist relic encounter state: " + ex.getMessage()); return false; }
     }
 }

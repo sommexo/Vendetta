@@ -65,19 +65,20 @@ final class ClassAbilityListener implements Listener {
     @EventHandler(ignoreCancelled = true)
     public void onInteract(PlayerInteractEvent event) {
         Player player = event.getPlayer();
-        if (plugin.isRelicDisabled(player.getUniqueId())) return;
         if (!ActivationRules.primaryHand(event.getHand())) return;
         String clazz = plugin.selectedClass(player.getUniqueId());
         ItemStack item = event.getItem();
         if (clazz == null || item == null) return;
         Action action = event.getAction();
         if ("phantom".equals(clazz)) {
-            if (action.isRightClick() && isSword(item)) armPredator(player);
+            if (action.isRightClick() && isSword(item) && !plugin.isRelicDisabled(player.getUniqueId(), "predators_instinct")) armPredator(player);
             if (action.isLeftClick() && item.getType() == Material.ENDER_PEARL) {
+                if (plugin.isRelicDisabled(player.getUniqueId(), "into_the_void")) return;
                 event.setCancelled(true);
                 activateVoid(player);
             }
-        } else if ("warden".equals(clazz) && action.isRightClick() && isSword(item)) {
+        } else if ("warden".equals(clazz) && action.isRightClick() && isSword(item)
+                && !plugin.isRelicDisabled(player.getUniqueId(), "sculk_pulse")) {
             activateSculkPulse(player);
         }
     }
@@ -149,7 +150,8 @@ final class ClassAbilityListener implements Listener {
                 }
                 combatUntil.put(victim.getUniqueId(), now + COMBAT_MS);
                 combatUntil.put(playerAttacker.getUniqueId(), now + COMBAT_MS);
-                if ("phantom".equals(plugin.selectedClass(victim.getUniqueId()))) {
+                if ("phantom".equals(plugin.selectedClass(victim.getUniqueId()))
+                        && !plugin.isRelicDisabled(victim.getUniqueId(), "marked_prey")) {
                     int seconds = switch (progression.tier(victim.getUniqueId(), "marked_prey")) {
                         case DORMANT -> 6; case IMPERFECT -> 9; case PERFECT -> 15; case ASCENDANT -> 15;
                     };
@@ -157,6 +159,7 @@ final class ClassAbilityListener implements Listener {
                 }
             }
             if ("phantom".equals(plugin.selectedClass(victim.getUniqueId()))
+                    && !plugin.isRelicDisabled(victim.getUniqueId(), "predators_instinct")
                     && event instanceof EntityDamageByEntityEvent
                     && predatorArmedUntil.getOrDefault(victim.getUniqueId(), 0L) >= now
                     && isEligibleCounterAttacker(attacker)) {
@@ -350,6 +353,13 @@ final class ClassAbilityListener implements Listener {
             if (player != null) player.setWalkSpeed(entry.getValue());
         }
         previousWalkSpeed.clear(); stunUntil.clear();
+        for (Map.Entry<UUID, Boolean> entry : Map.copyOf(previousMobAi).entrySet()) {
+            for (org.bukkit.World world : plugin.getServer().getWorlds()) {
+                Entity entity = world.getEntity(entry.getKey());
+                if (entity instanceof Monster mob && mob.isValid()) mob.setAI(entry.getValue());
+            }
+        }
+        previousMobAi.clear(); mobStunUntil.clear(); knockupUntil.clear();
         for (UUID id : Set.copyOf(activeVoids)) {
             Player player = plugin.getServer().getPlayer(id);
             if (player != null) finishVoid(player);
@@ -359,6 +369,7 @@ final class ClassAbilityListener implements Listener {
     void classChanged(Player player) {
         UUID id = player.getUniqueId();
         predatorArmedUntil.remove(id);
+        clearPlayerStun(player);
         if (activeVoids.contains(id)) finishVoid(player);
         applyWardenResistance(player);
     }
@@ -426,17 +437,20 @@ final class ClassAbilityListener implements Listener {
     @EventHandler public void onJoin(PlayerJoinEvent event) { applyWardenResistance(event.getPlayer()); }
     @EventHandler public void onWorldChange(PlayerChangedWorldEvent event) {
         UUID id = event.getPlayer().getUniqueId();
+        predatorArmedUntil.remove(id);
         clearPlayerStun(event.getPlayer());
         recentAttacker.remove(id); recentAttackerAt.remove(id);
         if (activeVoids.contains(id)) finishVoid(event.getPlayer());
     }
     @EventHandler public void onQuit(PlayerQuitEvent event) {
         UUID id = event.getPlayer().getUniqueId(); recentAttacker.remove(id); recentAttackerAt.remove(id);
+        predatorArmedUntil.remove(id);
         clearPlayerStun(event.getPlayer());
         if (activeVoids.contains(id)) finishVoid(event.getPlayer());
     }
     @EventHandler public void onDeath(PlayerDeathEvent event) {
         UUID id = event.getEntity().getUniqueId(); recentAttacker.remove(id); recentAttackerAt.remove(id);
+        predatorArmedUntil.remove(id);
         clearPlayerStun(event.getEntity());
         if (activeVoids.contains(id)) finishVoid(event.getEntity());
     }

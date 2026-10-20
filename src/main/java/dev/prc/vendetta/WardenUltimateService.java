@@ -57,7 +57,7 @@ final class WardenUltimateService implements Listener {
 
     @EventHandler(ignoreCancelled = true)
     public void onInteract(PlayerInteractEvent event) {
-        if (plugin.isRelicDisabled(event.getPlayer().getUniqueId())) return;
+        if (plugin.isRelicDisabled(event.getPlayer().getUniqueId(), "ancient_guardian")) return;
         if (!ActivationRules.primaryHand(event.getHand()) || !event.getAction().isLeftClick()
                 || event.getItem() == null || event.getItem().getType() != Material.SHIELD
                 || !"warden".equals(plugin.selectedClass(event.getPlayer().getUniqueId()))) return;

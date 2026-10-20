@@ -12,6 +12,7 @@ import org.bukkit.event.Listener;
 import org.bukkit.event.block.Action;
 import org.bukkit.block.Block;
 import org.bukkit.block.Container;
+import org.bukkit.inventory.meta.BlockStateMeta;
 import org.bukkit.configuration.file.YamlConfiguration;
 import org.bukkit.event.inventory.InventoryClickEvent;
 import org.bukkit.event.inventory.InventoryDragEvent;
@@ -54,6 +55,8 @@ final class RelicService implements Listener {
     private final Set<java.util.UUID> abilityMenuLocks = new HashSet<>();
     private final Set<java.util.UUID> relicUseGuard = new HashSet<>();
 
+    record EligibleRelic(String clazz, String ability, int tier) { }
+
     RelicService(mark plugin, VanguardProgression progression, ClassProgression classProgression) {
         this.plugin = plugin;
         this.progression = progression;
@@ -79,14 +82,14 @@ final class RelicService implements Listener {
         ItemMeta meta = event.getItem().getItemMeta();
         if (meta == null || !meta.getPersistentDataContainer().has(classKey, PersistentDataType.STRING)) return;
         Player player = event.getPlayer();
-        if (plugin.isRelicDisabled(player.getUniqueId())) {
-            event.setCancelled(true);
-            player.sendMessage(plugin.message("&cYour relic abilities are shattered for now."));
-            return;
-        }
         String selectedClass = plugin.selectedClass(player.getUniqueId());
         String ability = meta.getPersistentDataContainer().get(abilityKey, PersistentDataType.STRING);
         if ("headweb".equals(ability)) ability = "bloodthirst";
+        if (plugin.isRelicDisabled(player.getUniqueId(), ability)) {
+            event.setCancelled(true);
+            player.sendMessage(plugin.message("&cThat relic ability is disabled for now."));
+            return;
+        }
         String clazz = meta.getPersistentDataContainer().get(classKey, PersistentDataType.STRING);
         int tier = meta.getPersistentDataContainer().getOrDefault(tierKey, PersistentDataType.INTEGER, 0);
         EquipmentSlot hand = event.getHand();
@@ -132,6 +135,86 @@ final class RelicService implements Listener {
         String relicId = pdc.get(relicIdKey, PersistentDataType.STRING);
         if (!issuedRelics.contains(relicId) || consumedRelics.contains(relicId)) return false;
         return true;
+    }
+
+    boolean isGenuineRelicItem(ItemStack item) {
+        if (item == null || !item.hasItemMeta()) return false;
+        var pdc = item.getItemMeta().getPersistentDataContainer();
+        return isGenuineRelic(item, pdc.get(classKey, PersistentDataType.STRING),
+                pdc.get(abilityKey, PersistentDataType.STRING),
+                pdc.getOrDefault(tierKey, PersistentDataType.INTEGER, 0));
+    }
+
+    int removeGenuineRelics(Player player) {
+        int removed = removeGenuineRelics(player.getInventory().getContents(), player.getInventory()::setItem);
+        removed += removeGenuineRelics(player.getEnderChest().getContents(), player.getEnderChest()::setItem);
+        // Applied relics are represented by ability tiers rather than items. Clear only tier
+        // records; class selection, cooldowns, kill streaks, and other progression survive.
+        VanguardProgression.PlayerData data = progression.get(player.getUniqueId());
+        data.berserker = VanguardProgression.Upgrade.DORMANT;
+        data.bloodthirst = VanguardProgression.Upgrade.DORMANT;
+        data.ultimate = VanguardProgression.Upgrade.DORMANT;
+        progression.save(player.getUniqueId());
+        for (String ability : List.of("predators_instinct", "marked_prey", "into_the_void", "afterimage",
+                "unshaken", "sculk_pulse", "ancient_guardian", "unyielding")) {
+            classProgression.tier(player.getUniqueId(), ability, VanguardProgression.Upgrade.DORMANT);
+        }
+        classProgression.save(player.getUniqueId());
+        return removed;
+    }
+
+    List<EligibleRelic> highestTierRelics(Player player) {
+        String clazz = plugin.selectedClass(player.getUniqueId());
+        if (clazz == null) return List.of();
+        List<EligibleRelic> eligible = new ArrayList<>();
+        if (clazz.equals("vanguard")) {
+            VanguardProgression.PlayerData data = progression.get(player.getUniqueId());
+            addEligible(eligible, clazz, "berserker", data.berserker);
+            addEligible(eligible, clazz, "bloodthirst", data.bloodthirst);
+            addEligible(eligible, clazz, "ultimate", data.ultimate);
+        } else {
+            List<String> abilities = clazz.equals("phantom")
+                    ? List.of("predators_instinct", "marked_prey", "into_the_void", "afterimage")
+                    : List.of("unshaken", "sculk_pulse", "ancient_guardian", "unyielding");
+            for (String ability : abilities) addEligible(eligible, clazz, ability,
+                    classProgression.tier(player.getUniqueId(), ability));
+        }
+        eligible.removeIf(relic -> plugin.isRelicDisabled(player.getUniqueId(), relic.ability()));
+        int highest = eligible.stream().mapToInt(EligibleRelic::tier).max().orElse(0);
+        return eligible.stream().filter(relic -> relic.tier() == highest).toList();
+    }
+
+    private void addEligible(List<EligibleRelic> list, String clazz, String ability, VanguardProgression.Upgrade tier) {
+        int numeric = switch (tier) {
+            case IMPERFECT -> 1; case PERFECT -> 2; case ASCENDANT -> 3; default -> 0;
+        };
+        if (numeric > 0) list.add(new EligibleRelic(clazz, ability, numeric));
+    }
+
+    private int removeGenuineRelics(ItemStack[] contents, java.util.function.BiConsumer<Integer, ItemStack> setter) {
+        int removed = 0;
+        for (int slot = 0; slot < contents.length; slot++) {
+            ItemStack item = contents[slot];
+            if (isGenuineRelicItem(item)) {
+                setter.accept(slot, null);
+                removed++;
+                continue;
+            }
+            if (item == null || !item.hasItemMeta() || !(item.getItemMeta() instanceof BlockStateMeta meta)) continue;
+            org.bukkit.block.BlockState nestedState = meta.getBlockState();
+            if (!(nestedState instanceof Container container)) continue;
+            ItemStack[] nested = container.getInventory().getContents();
+            int nestedRemoved = removeGenuineRelics(nested, container.getInventory()::setItem);
+            if (nestedRemoved > 0) {
+                container.update(true, false);
+                meta.setBlockState(nestedState);
+                item.setItemMeta(meta);
+                contents[slot] = item;
+                setter.accept(slot, item);
+                removed += nestedRemoved;
+            }
+        }
+        return removed;
     }
 
     boolean validRelicDefinition(String clazz, String ability, int tier) {

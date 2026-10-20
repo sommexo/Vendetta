@@ -87,7 +87,8 @@ final class VanguardAbilityListener implements Listener {
         }
 
         // Bloodthirst can only counter a direct attacker while the Vanguard is crouching with a sword.
-        if (victim != null && source != null && source != victim && isVanguard(victim) && victim.isSneaking()
+        if (victim != null && source != null && source != victim && isVanguard(victim)
+                && !plugin.isRelicDisabled(victim.getUniqueId(), "bloodthirst") && victim.isSneaking()
                 && event instanceof EntityDamageByEntityEvent && eligibleCombatDamage(event)
                 && isSword(victim.getInventory().getItemInMainHand())
                 && counterWindows.getOrDefault(victim.getUniqueId(), 0L) >= now) {
@@ -95,7 +96,8 @@ final class VanguardAbilityListener implements Listener {
             triggerBloodthirst(victim);
         }
 
-        if (!(event instanceof EntityDamageByEntityEvent) || attacker == null || !isVanguard(attacker) || !isVanguardWeapon(attacker.getInventory().getItemInMainHand())
+        if (!(event instanceof EntityDamageByEntityEvent) || attacker == null || !isVanguard(attacker)
+                || plugin.isRelicDisabled(attacker.getUniqueId(), "berserker") || !isVanguardWeapon(attacker.getInventory().getItemInMainHand())
                 || activeUltimates.contains(attacker.getUniqueId()) || !eligibleCombatDamage(event)) return;
         applyBerserker(attacker, event);
     }
@@ -155,6 +157,7 @@ final class VanguardAbilityListener implements Listener {
 
     @EventHandler public void onWorldChange(PlayerChangedWorldEvent event) {
         Player player = event.getPlayer();
+        counterWindows.remove(player.getUniqueId());
         recentPlayerAttacker.remove(player.getUniqueId());
         recentPlayerAttackAt.remove(player.getUniqueId());
         clearOpponentLinks(player.getUniqueId());
@@ -298,6 +301,7 @@ final class VanguardAbilityListener implements Listener {
     }
 
     void shutdown() {
+        counterWindows.clear();
         for (UUID id : Set.copyOf(activeUltimates)) {
             Player player = plugin.getServer().getPlayer(id);
             if (player != null) finishUltimate(player);

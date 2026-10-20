@@ -23,7 +23,7 @@ final class VanguardActivationHandler implements Listener {
     public void onRightClick(PlayerInteractEvent event) {
         if (!event.getAction().isRightClick() || event.getHand() != EquipmentSlot.HAND) return;
         Player player = event.getPlayer();
-        if (plugin.isRelicDisabled(player.getUniqueId())) return;
+        if (plugin.isRelicDisabled(player.getUniqueId(), "bloodthirst")) return;
         if (!progression.get(player.getUniqueId()).vanguard) return;
         if (event.getItem() == null || !event.getItem().getType().name().endsWith("_SWORD")) return;
         abilities.beginBloodthirstWindow(player);
@@ -31,7 +31,8 @@ final class VanguardActivationHandler implements Listener {
 
     @EventHandler
     public void onTotemPop(EntityResurrectEvent event) {
-        if (!(event.getEntity() instanceof Player player) || !progression.get(player.getUniqueId()).vanguard) return;
+        if (!(event.getEntity() instanceof Player player) || !progression.get(player.getUniqueId()).vanguard
+                || plugin.isRelicDisabled(player.getUniqueId(), "ultimate")) return;
         plugin.getServer().getScheduler().runTask(plugin, () -> {
             if (!event.isCancelled()) abilities.activateUltimate(player, true);
         });

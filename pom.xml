@@ -18,7 +18,7 @@
     </properties>
 
     <build>
-        <finalName>venmark-v1-beta-build-4</finalName>
+        <finalName>vendetta_paper1</finalName>
         <defaultGoal>clean package</defaultGoal>
         <plugins>
             <plugin>
