@@ -386,10 +386,10 @@ final class RelicEncounterService implements Listener {
             saveHuntQuest(quest);
             player.sendMessage(plugin.message("&cCrazy Angel: Defeat 6 Pillagers within 15 minutes! Reward: diamonds and Marks."));
         }
+        HuntQuest scheduledQuest = huntQuests.get(player.getUniqueId());
         Bukkit.getScheduler().runTaskLater(plugin, () -> {
             HuntQuest active = huntQuests.get(player.getUniqueId());
-            if (active != null && active.owner().equals(quest.owner()) && active.mobType().equals(quest.mobType())
-                    && active.required() == quest.required() && active.marks() == quest.marks()) {
+            if (active != null && active.equals(scheduledQuest)) {
                 huntQuests.remove(player.getUniqueId());
                 state.set("hunt-quests." + player.getUniqueId(), null);
                 saveState();
@@ -497,6 +497,15 @@ final class RelicEncounterService implements Listener {
         saveState();
         Map<Integer, ItemStack> overflow = killer.getInventory().addItem(new ItemStack(Material.DIAMOND, quest.diamonds()));
         overflow.values().forEach(item -> killer.getWorld().dropItemNaturally(killer.getLocation(), item));
+        if (quest.mobType().equals("SKELETON")) {
+            ItemStack fragment = new ItemStack(Material.AMETHYST_SHARD);
+            ItemMeta fragmentMeta = fragment.getItemMeta();
+            fragmentMeta.setDisplayName(ChatColor.LIGHT_PURPLE + "Angel Fragment");
+            fragmentMeta.setLore(List.of(ChatColor.GRAY + "A mysterious relic-crafting material."));
+            fragment.setItemMeta(fragmentMeta);
+            Map<Integer, ItemStack> fragmentOverflow = killer.getInventory().addItem(fragment);
+            fragmentOverflow.values().forEach(item -> killer.getWorld().dropItemNaturally(killer.getLocation(), item));
+        }
         if (quest.marks() > 0) plugin.credit(killer.getUniqueId(), quest.marks(), "angelic hunt quest reward");
         killer.sendMessage(plugin.message("&aAngelic hunt complete! You received " + quest.diamonds() + " diamonds"
                 + (quest.marks() > 0 ? " and " + quest.marks() + " Marks." : "!")));
