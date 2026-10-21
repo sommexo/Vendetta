@@ -46,4 +46,17 @@ class AngelSpawnBoundaryTest {
         assertEquals(new AngelSpawnBoundary.SpawnPosition("world_nether", 12.25, 71.0, -8.75), locations.get(entity));
         assertEquals(1, locations.size());
     }
+
+    @Test
+    void waveCandidatesMustBeSpacedFromAlreadySpawnedAngels() {
+        var existing = java.util.List.of(new AngelSpawnBoundary.SpawnPosition("world", 10.5, 70, -4.5));
+        assertFalse(AngelSpawnBoundary.separatedFromExisting("world", 20.5, -4.5, existing,
+                AngelSpawnBoundary.MINIMUM_WAVE_SPAWN_SEPARATION));
+        assertFalse(AngelSpawnBoundary.separatedFromExisting("world", 110.49, -4.5, existing,
+                AngelSpawnBoundary.MINIMUM_WAVE_SPAWN_SEPARATION));
+        assertTrue(AngelSpawnBoundary.separatedFromExisting("world", 110.5, -4.5, existing,
+                AngelSpawnBoundary.MINIMUM_WAVE_SPAWN_SEPARATION));
+        assertTrue(AngelSpawnBoundary.separatedFromExisting("world_nether", 10.5, -4.5, existing,
+                AngelSpawnBoundary.MINIMUM_WAVE_SPAWN_SEPARATION));
+    }
 }

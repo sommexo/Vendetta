@@ -24,12 +24,18 @@ final class VendettaCommands implements BasicCommand {
                 sender.sendMessage(plugin.message("&cManual Angel escapes are disabled. Enable them with /vendetta settings triggerableAngelEscapes true"));
                 return;
             }
-            if (!plugin.triggerAngelEscape()) {
+            AngelWaveSpawnResult result = plugin.triggerAngelEscape();
+            if (result == null) {
                 sender.sendMessage(plugin.message("&cAngel encounter service is not ready."));
                 return;
             }
             plugin.audit("manual Angel escape triggered by " + sender.getName());
-            sender.sendMessage(plugin.message("&aManual Angel escape wave triggered."));
+            if (!result.started()) {
+                sender.sendMessage(plugin.message("&cNo Angel wave started. Check the server log for type exclusions or safe-spawn failures."));
+                return;
+            }
+            sender.sendMessage(plugin.message("&aManual Angel escape wave started; " + result.spawned() + " Angels spawned:"));
+            for (String coordinates : result.coordinateLines()) sender.sendMessage(plugin.message(coordinates));
             return;
         }
         if (args.length != 3 || !args[0].equalsIgnoreCase("settings")

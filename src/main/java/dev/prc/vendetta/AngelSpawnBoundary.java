@@ -6,6 +6,7 @@ import java.util.UUID;
 /** Geometry and tracking helpers for Angel spawns. Bukkit world borders are axis-aligned squares. */
 final class AngelSpawnBoundary {
     private static final double DISTANCE_RATIO = 1.5;
+    static final double MINIMUM_WAVE_SPAWN_SEPARATION = 100.0;
 
     private AngelSpawnBoundary() { }
 
@@ -49,6 +50,20 @@ final class AngelSpawnBoundary {
     }
 
     record SpawnPosition(String world, double x, double y, double z) { }
+
+    static boolean separatedFromExisting(String world, double x, double z,
+                                          Iterable<SpawnPosition> existing, double minimumDistance) {
+        if (world == null || !Double.isFinite(x) || !Double.isFinite(z)
+                || !Double.isFinite(minimumDistance) || minimumDistance < 0) return false;
+        double minimumSquared = minimumDistance * minimumDistance;
+        for (SpawnPosition position : existing) {
+            if (!world.equals(position.world())) continue;
+            double dx = x - position.x();
+            double dz = z - position.z();
+            if (dx * dx + dz * dz < minimumSquared) return false;
+        }
+        return true;
+    }
 
     static void recordSuccessfulSpawn(Map<UUID, SpawnPosition> positions, UUID entityId,
                                       String world, double x, double y, double z) {

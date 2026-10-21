@@ -16,12 +16,14 @@ import org.bukkit.event.entity.EntityExplodeEvent;
 import org.bukkit.event.entity.EntityDamageByEntityEvent;
 import org.bukkit.event.entity.EntityDeathEvent;
 import org.bukkit.event.entity.EntityPickupItemEvent;
+import org.bukkit.event.entity.EntityTargetLivingEntityEvent;
 import org.bukkit.event.inventory.InventoryClickEvent;
 import org.bukkit.event.inventory.InventoryDragEvent;
 import org.bukkit.event.inventory.InventoryCloseEvent;
 import org.bukkit.event.world.ChunkLoadEvent;
 import org.bukkit.event.player.PlayerInteractEntityEvent;
 import org.bukkit.event.player.PlayerInteractEvent;
+import org.bukkit.event.player.PlayerItemDamageEvent;
 import org.bukkit.event.player.PlayerRespawnEvent;
 import org.bukkit.event.player.PlayerJoinEvent;
 import org.bukkit.inventory.ItemStack;
@@ -32,6 +34,7 @@ import org.bukkit.inventory.Inventory;
 import org.bukkit.inventory.InventoryHolder;
 import org.bukkit.inventory.PlayerInventory;
 import org.bukkit.inventory.meta.ItemMeta;
+import org.bukkit.inventory.meta.Damageable;
 import org.bukkit.persistence.PersistentDataType;
 
 import java.io.File;
@@ -56,6 +59,7 @@ final class RelicEncounterService implements Listener {
     private final Set<String> paidShatterIds = new HashSet<>();
     private final Set<String> usedShatterIds = new HashSet<>();
     private final Set<UUID> swordUseLocks = new HashSet<>();
+    private final Set<UUID> preserveShatterDurabilityOnce = new HashSet<>();
     private final Set<UUID> punishmentDeathsProcessed = new HashSet<>();
     // Legacy UUID-only receipts remain readable; new deaths use replayable records below.
     private final Set<UUID> legacyAngelDeathsProcessed = new LinkedHashSet<>();
@@ -80,6 +84,8 @@ final class RelicEncounterService implements Listener {
         Quest complete() { return new Quest(owner, world, x, y, z, type, true, heartId, expiresAt, rewardMarks); }
         String key() { return world + ":" + x + ":" + y + ":" + z; }
     }
+
+    private record CacheLocation(Location location, boolean surfaceFallback, int searchRadius) { }
 
     private record HuntQuest(UUID owner, String objective, String mobType, int required, int progress,
                             int diamonds, long marks, String itemType, String enchantment,
@@ -192,8 +198,8 @@ final class RelicEncounterService implements Listener {
         }));
         Bukkit.getScheduler().runTask(plugin, this::recoverAngelDeaths);
         Bukkit.getScheduler().runTaskTimer(plugin, this::recoverAngelDeaths, 20L * 10, 20L * 30);
-        Bukkit.getScheduler().runTaskLater(plugin, this::spawnWave, 40L);
-        Bukkit.getScheduler().runTaskTimer(plugin, this::spawnWave, interval, interval);
+        Bukkit.getScheduler().runTaskLater(plugin, () -> spawnWave(false), 40L);
+        Bukkit.getScheduler().runTaskTimer(plugin, () -> spawnWave(false), interval, interval);
         Bukkit.getScheduler().runTaskTimer(plugin, this::expireOldDisables, 20L * 30, 20L * 30);
     }
 
@@ -206,9 +212,9 @@ final class RelicEncounterService implements Listener {
         saveState();
     }
 
-    void triggerManualWave() { spawnWave(); }
+    AngelWaveSpawnResult triggerManualWave() { return spawnWave(true); }
 
-    private void spawnWave() {
+    private AngelWaveSpawnResult spawnWave(boolean manual) {
         if (currentWaveExpiresAt > 0L) {
             currentWaveExpiresAt = 0L;
             expireWandererQuests();
@@ -216,15 +222,23 @@ final class RelicEncounterService implements Listener {
         cleanupOldVillagers();
         int count = 8;
         List<World> worlds = Bukkit.getWorlds();
-        if (worlds.isEmpty()) return;
+        if (worlds.isEmpty()) {
+            plugin.getLogger().warning("Could not start Angel wave: the server has no loaded worlds.");
+            return new AngelWaveSpawnResult(manual, false, count, List.of());
+        }
         Set<String> excludedThisWave = new HashSet<>();
         excludedTypes.forEach((type, waves) -> { if (waves > 0) excludedThisWave.add(type); });
-        List<String> eligibleTypes = new ArrayList<>(List.of("crazy", "imperfect", "perfect", "ascendant", "wanderer"));
-        eligibleTypes.removeAll(excludedThisWave);
-        if (eligibleTypes.isEmpty()) eligibleTypes.add("imperfect");
-        List<String> waveTypes = new ArrayList<>(eligibleTypes);
-        while (waveTypes.size() < count) waveTypes.add(eligibleTypes.get(ThreadLocalRandom.current().nextInt(eligibleTypes.size())));
-        Collections.shuffle(waveTypes);
+        List<String> waveTypes = AngelWaveTypes.compose(excludedThisWave, count, ThreadLocalRandom.current());
+        Map<String, Long> plannedComposition = waveTypes.stream()
+                .collect(java.util.stream.Collectors.groupingBy(type -> type, TreeMap::new, java.util.stream.Collectors.counting()));
+        plugin.getLogger().info("Angel wave planned type counts=" + plannedComposition + "; excluded types=" + excludedThisWave);
+        if (waveTypes.isEmpty()) {
+            consumeExcludedWave();
+            plugin.getLogger().warning("Angel wave skipped because all five types are excluded. No Imperfect fallback was spawned; one skipped wave advanced the three-wave exclusions.");
+            return new AngelWaveSpawnResult(manual, false, count, List.of());
+        }
+        if (plannedComposition.size() == 1 && plannedComposition.containsKey("imperfect"))
+            plugin.getLogger().warning("This Angel wave contains only Imperfect Angels because all other types are currently excluded: " + excludedThisWave);
         List<Integer> imperfectSlots = new ArrayList<>();
         for (int i = 0; i < waveTypes.size(); i++) if (waveTypes.get(i).equals("imperfect")) imperfectSlots.add(i);
         Collections.shuffle(imperfectSlots);
@@ -233,19 +247,81 @@ final class RelicEncounterService implements Listener {
         Set<Integer> bonusSlots = new HashSet<>(imperfectSlots.subList(0, Math.min(bonusPerfectOffers, imperfectSlots.size())));
         String waveId = UUID.randomUUID().toString();
         currentWaveId = waveId;
-        int spawned = 0;
+        List<AngelWaveSpawnResult.SpawnedAngel> spawned = new ArrayList<>();
+        List<AngelSpawnBoundary.SpawnPosition> reservedSpawnLocations = new ArrayList<>();
         for (int i = 0; i < count; i++) {
-            SpawnPoint point = findStructureLocation(worlds);
+            SpawnPoint point = findStructureLocation(worlds, reservedSpawnLocations);
             if (point == null) continue;
-            Location location = point.location();
-            Villager villager = (Villager) location.getWorld().spawnEntity(location, EntityType.VILLAGER);
+            String questType = waveTypes.get(i);
+            AngelWaveSpawnResult.SpawnedAngel angel = spawnAngelAt(point, waveId, questType,
+                    questType.equals("imperfect") && bonusSlots.contains(i));
+            if (angel != null) {
+                spawned.add(angel);
+                reservedSpawnLocations.add(angel.position());
+            }
+        }
+        // A failed location/entity attempt must not silently erase one of the required wave types.
+        for (String requiredType : new LinkedHashSet<>(waveTypes)) {
+            if (spawned.stream().anyMatch(angel -> angel.type().equals(requiredType))) continue;
+            for (int retry = 0; retry < 3 && spawned.size() < count; retry++) {
+                SpawnPoint point = findStructureLocation(worlds, reservedSpawnLocations);
+                if (point == null) break;
+                AngelWaveSpawnResult.SpawnedAngel replacement = spawnAngelAt(point, waveId, requiredType, false);
+                if (replacement == null) continue;
+                spawned.add(replacement);
+                reservedSpawnLocations.add(replacement.position());
+                break;
+            }
+            if (spawned.stream().noneMatch(angel -> angel.type().equals(requiredType)))
+                plugin.getLogger().warning("Angel wave could not spawn required eligible type '" + requiredType
+                        + "' after bounded replacement attempts; active exclusions=" + excludedThisWave + ".");
+        }
+        if (spawned.isEmpty()) {
+            currentWaveId = "";
+            currentWaveExpiresAt = 0L;
+            plugin.getLogger().warning("Angel wave was not started because none of its 8 spawn attempts produced a valid Angel.");
+            return new AngelWaveSpawnResult(manual, false, count, List.of());
+        }
+        consumeExcludedWave();
+        Bukkit.broadcastMessage(plugin.message(manual ? "Angels broke free" : "Angels escaped"));
+        long lifetime = 15L * 60 * 20;
+        currentWaveExpiresAt = System.currentTimeMillis() + 15L * 60 * 1000;
+        waveExpiryTask = Bukkit.getScheduler().runTaskLater(plugin, () -> expireWave(waveId), lifetime).getTaskId();
+        plugin.getLogger().info("Spawned " + spawned.size() + " of " + count + " relic villagers for this "
+                + (manual ? "manual" : "hourly") + " wave.");
+        for (AngelWaveSpawnResult.SpawnedAngel angel : spawned) {
+            AngelSpawnBoundary.SpawnPosition position = angel.position();
+            plugin.getLogger().info("Angel type=" + angel.type() + " uuid=" + angel.entityId() + " spawned at " + position.world() + " "
+                    + position.x() + " " + position.y() + " " + position.z());
+        }
+        return new AngelWaveSpawnResult(manual, true, count, spawned);
+    }
+
+    private void consumeExcludedWave() {
+        excludedTypes.replaceAll((type, waves) -> waves - 1);
+        excludedTypes.entrySet().removeIf(entry -> entry.getValue() <= 0);
+        saveExclusions();
+    }
+
+    private AngelWaveSpawnResult.SpawnedAngel spawnAngelAt(SpawnPoint point, String waveId,
+                                                           String questType, boolean bonusPerfect) {
+        Location location = point.location();
+        Villager villager = null;
+        try {
+            Entity created = location.getWorld().spawnEntity(location, EntityType.VILLAGER);
+            if (!(created instanceof Villager angel) || !angel.isValid()) {
+                if (created != null) created.remove();
+                plugin.getLogger().warning("Angel spawn attempt returned no valid " + questType + " villager at " + location + ".");
+                return null;
+            }
+            villager = angel;
             Location actualLocation = villager.getLocation();
             if (!isWithinAngelSpawnArea(actualLocation)) {
                 villager.remove();
                 plugin.getLogger().warning("Discarded an Angel spawn outside the permitted world-border area in "
                         + actualLocation.getWorld().getName() + " at " + actualLocation.getX() + ", "
                         + actualLocation.getY() + ", " + actualLocation.getZ());
-                continue;
+                return null;
             }
             villager.setCustomName(ChatColor.GOLD + "Angel");
             villager.setCustomNameVisible(true);
@@ -255,32 +331,45 @@ final class RelicEncounterService implements Listener {
             villager.setVillagerExperience(0);
             villager.setAdult();
             villager.setAI(false);
+            villager.setTarget(null);
             villager.setCollidable(false);
             villager.setPersistent(true);
             villager.setRemoveWhenFarAway(false);
-            AngelSpawnBoundary.recordSuccessfulSpawn(angelSpawnLocations, villager.getUniqueId(),
-                    actualLocation.getWorld().getName(), actualLocation.getX(), actualLocation.getY(), actualLocation.getZ());
             villager.getPersistentDataContainer().set(villagerKey, PersistentDataType.BYTE, (byte) 1);
             villager.getPersistentDataContainer().set(waveKey, PersistentDataType.STRING, waveId);
-            String questType = waveTypes.get(i);
             villager.getPersistentDataContainer().set(villagerQuestTypeKey, PersistentDataType.STRING, questType);
-            boolean bonusPerfect = questType.equals("imperfect") && bonusSlots.contains(i);
             villager.getPersistentDataContainer().set(perfectOfferKey, PersistentDataType.BYTE, (byte) (bonusPerfect ? 1 : 0));
             villager.setRecipes(Collections.emptyList());
             if (List.of("imperfect", "perfect", "ascendant", "wanderer").contains(questType))
                 angelOffers.put(villager.getUniqueId(), generateOffers(questType, bonusPerfect));
-            spawned++;
+
+            actualLocation = villager.getLocation();
+            if (!villager.isValid() || !isWithinAngelSpawnArea(actualLocation)) {
+                angelOffers.remove(villager.getUniqueId());
+                villager.remove();
+                plugin.getLogger().warning("Angel became invalid or left the permitted spawn area before registration; skipping this slot.");
+                return null;
+            }
+            AngelSpawnBoundary.recordSuccessfulSpawn(angelSpawnLocations, villager.getUniqueId(),
+                    actualLocation.getWorld().getName(), actualLocation.getX(), actualLocation.getY(), actualLocation.getZ());
+            return new AngelWaveSpawnResult.SpawnedAngel(villager.getUniqueId(), questType,
+                    angelSpawnLocations.get(villager.getUniqueId()));
+        } catch (RuntimeException ex) {
+            if (villager != null) {
+                angelOffers.remove(villager.getUniqueId());
+                angelSpawnLocations.remove(villager.getUniqueId());
+                villager.remove();
+            }
+            plugin.getLogger().warning("Angel " + questType + " spawn attempt failed at " + location + ": " + ex.getMessage());
+            return null;
         }
-        excludedTypes.replaceAll((type, waves) -> waves - 1);
-        excludedTypes.entrySet().removeIf(entry -> entry.getValue() <= 0);
-        saveExclusions();
-        if (spawned > 0) {
-            Bukkit.broadcastMessage(plugin.message("Angels escaped"));
-            long lifetime = 15L * 60 * 20;
-            currentWaveExpiresAt = System.currentTimeMillis() + 15L * 60 * 1000;
-            waveExpiryTask = Bukkit.getScheduler().runTaskLater(plugin, () -> expireWave(waveId), lifetime).getTaskId();
-        }
-        plugin.getLogger().info("Spawned " + spawned + " relic villagers for this hourly wave.");
+    }
+
+    @EventHandler(priority = org.bukkit.event.EventPriority.HIGHEST, ignoreCancelled = true)
+    public void preventHostileTargetingAngel(EntityTargetLivingEntityEvent event) {
+        if (!(event.getTarget() instanceof Villager villager)
+                || !villager.getPersistentDataContainer().has(villagerKey, PersistentDataType.BYTE)) return;
+        event.setCancelled(true);
     }
 
     private void expireWave(String waveId) {
@@ -329,45 +418,79 @@ final class RelicEncounterService implements Listener {
 
     private record SpawnPoint(Location location, String structureName) { }
 
-    private SpawnPoint findStructureLocation(List<World> worlds) {
+    private SpawnPoint findStructureLocation(List<World> worlds,
+                                            List<AngelSpawnBoundary.SpawnPosition> reservedSpawnLocations) {
         List<StructureWeight> structures = configuredStructures();
-        if (structures.isEmpty()) return null;
-        for (int attempt = 0; attempt < 18; attempt++) {
+        int boundaryRejected = 0;
+        int unsafeRejected = 0;
+        int structureMisses = 0;
+        int unavailableStructures = 0;
+        int tooCloseToExisting = 0;
+        for (int attempt = 0; attempt < 18 && !structures.isEmpty(); attempt++) {
             World world = worlds.get(ThreadLocalRandom.current().nextInt(worlds.size()));
             Player anchor = world.getPlayers().isEmpty() ? null : world.getPlayers().get(ThreadLocalRandom.current().nextInt(world.getPlayers().size()));
             Location origin = anchor == null ? world.getSpawnLocation() : anchor.getLocation();
             StructureWeight choice = weightedChoice(structures);
             try {
                 var result = world.locateNearestStructure(origin, choice.structure(), Math.max(1, plugin.getConfig().getInt("relic-villagers.search-radius-chunks", 96)), false);
-                if (result == null) continue;
+                if (result == null) { structureMisses++; continue; }
                 Location loc = result.getLocation().clone().add(2, 1, 2);
-                if (!isWithinAngelSpawnArea(loc)) continue;
+                if (!isWithinAngelSpawnArea(loc)) { boundaryRejected++; continue; }
+                if (!isSeparated(loc, reservedSpawnLocations)) {
+                    tooCloseToExisting++;
+                    // Repeating locateNearestStructure with the same origin would return this same structure.
+                    break;
+                }
                 // Structure lookup does not load chunks. This loop is bounded to 18 candidates.
                 loc.getChunk().load();
                 if (loc.getBlock().getType().isSolid()) loc.add(0, 1, 0);
                 if (loc.getBlock().isPassable() && loc.clone().add(0, 1, 0).getBlock().isPassable()) {
                     if (isWithinAngelSpawnArea(loc)) return new SpawnPoint(loc, choice.name());
+                    boundaryRejected++;
+                } else {
+                    unsafeRejected++;
                 }
             } catch (IllegalArgumentException ex) {
+                unavailableStructures++;
                 plugin.getLogger().fine("Structure unavailable on this server version: " + choice.name());
+            } catch (RuntimeException ex) {
+                unsafeRejected++;
+                plugin.getLogger().fine("Angel structure candidate failed validation for " + choice.name() + ": " + ex.getMessage());
             }
         }
         // Bounded fallback around each world's real spawn. Border validation precedes chunk access.
         for (World world : worlds) {
             Location worldSpawn = world.getSpawnLocation();
             for (int attempt = 0; attempt < 18; attempt++) {
-                int dx = attempt == 0 ? 0 : ThreadLocalRandom.current().nextInt(-12, 13);
-                int dz = attempt == 0 ? 0 : ThreadLocalRandom.current().nextInt(-12, 13);
+                int dx = attempt == 0 ? 0 : ThreadLocalRandom.current().nextInt(-256, 257);
+                int dz = attempt == 0 ? 0 : ThreadLocalRandom.current().nextInt(-256, 257);
                 Location candidate = new Location(world, worldSpawn.getX() + dx + 0.5, worldSpawn.getY(), worldSpawn.getZ() + dz + 0.5);
-                if (!isWithinAngelSpawnArea(candidate)) continue;
-                candidate.getChunk().load();
-                candidate.setY(world.getHighestBlockYAt(candidate) + 1);
-                if (candidate.getBlock().isPassable() && candidate.clone().add(0, 1, 0).getBlock().isPassable()
-                        && isWithinAngelSpawnArea(candidate)) return new SpawnPoint(candidate, "WORLD_SPAWN");
+                if (!isWithinAngelSpawnArea(candidate)) { boundaryRejected++; continue; }
+                if (!isSeparated(candidate, reservedSpawnLocations)) { tooCloseToExisting++; continue; }
+                try {
+                    candidate.getChunk().load();
+                    candidate.setY(world.getHighestBlockYAt(candidate) + 1);
+                    if (candidate.getBlock().isPassable() && candidate.clone().add(0, 1, 0).getBlock().isPassable()
+                            && isWithinAngelSpawnArea(candidate)) return new SpawnPoint(candidate, "WORLD_SPAWN");
+                    if (!isWithinAngelSpawnArea(candidate)) boundaryRejected++; else unsafeRejected++;
+                } catch (RuntimeException ex) {
+                    unsafeRejected++;
+                    plugin.getLogger().fine("Angel world-spawn candidate failed safety validation in "
+                            + world.getName() + ": " + ex.getMessage());
+                }
             }
         }
-        plugin.getLogger().warning("Could not find a safe Angel spawn inside the permitted world-border area after bounded attempts; this spawn was skipped.");
+        plugin.getLogger().warning("Could not find a safe Angel spawn after bounded attempts; skipped this slot. "
+                + "Candidates outside the allowed border/inner area=" + boundaryRejected + ", unsafe terrain="
+                + unsafeRejected + ", structures not found=" + structureMisses + ", unavailable structure lookups="
+                + unavailableStructures + ", too close to another Angel=" + tooCloseToExisting
+                + ", configured structures=" + structures.size() + ".");
         return null;
+    }
+
+    private boolean isSeparated(Location candidate, List<AngelSpawnBoundary.SpawnPosition> existing) {
+        return AngelSpawnBoundary.separatedFromExisting(candidate.getWorld().getName(), candidate.getX(), candidate.getZ(),
+                existing, AngelSpawnBoundary.MINIMUM_WAVE_SPAWN_SEPARATION);
     }
 
     private boolean isWithinAngelSpawnArea(Location location) {
@@ -778,6 +901,9 @@ final class RelicEncounterService implements Listener {
         ItemStack item = new ItemStack(Material.NETHERITE_SWORD);
         ItemMeta meta = item.getItemMeta();
         meta.setDisplayName(ChatColor.DARK_PURPLE + "Shatter Sword");
+        if (meta instanceof Damageable damageable) {
+            damageable.setDamage(Math.max(0, Material.NETHERITE_SWORD.getMaxDurability() - 1));
+        }
         String identity = UUID.randomUUID().toString();
         meta.setLore(List.of(ChatColor.GRAY + "Prepaid on first acquisition (500 Marks)",
                 ChatColor.GRAY + "Disables one highest-tier eligible relic for 30 minutes"));
@@ -837,6 +963,12 @@ final class RelicEncounterService implements Listener {
     @EventHandler(ignoreCancelled = true)
     public void onShatterSwordDrag(InventoryDragEvent event) {
         if (isShatterSword(event.getOldCursor())) event.setCancelled(true);
+    }
+
+    @EventHandler(ignoreCancelled = false)
+    public void onShatterSwordDurability(PlayerItemDamageEvent event) {
+        if (!preserveShatterDurabilityOnce.remove(event.getPlayer().getUniqueId())) return;
+        if (isShatterSword(event.getItem())) event.setCancelled(true);
     }
 
     @EventHandler(ignoreCancelled = true)
@@ -921,7 +1053,7 @@ final class RelicEncounterService implements Listener {
         var pdc = meta.getPersistentDataContainer();
         String id = pdc.get(shatterIdKey, PersistentDataType.STRING);
         if (id == null || id.isBlank()) return false;
-        if (paidShatterIds.contains(id)) {
+        if (!ShatterSwordIds.requiresAcquisitionCharge(id, paidShatterIds)) {
             pdc.set(shatterPaidKey, PersistentDataType.BYTE, (byte) 1);
             item.setItemMeta(meta);
             return true;
@@ -1173,6 +1305,11 @@ final class RelicEncounterService implements Listener {
         String clazz = plugin.selectedClass(owner.getUniqueId());
         if (!List.of("vanguard", "phantom", "warden").contains(clazz)) clazz = randomClass();
         contents.add(relics.createRelic(clazz, relicAbility(clazz, 2), 2));
+        contents.add(createShatterSword());
+        contents.add(new ItemStack(Material.DIAMOND, ThreadLocalRandom.current().nextInt(20, 36)));
+        contents.add(new ItemStack(Material.EMERALD, ThreadLocalRandom.current().nextInt(12, 21)));
+        contents.add(new ItemStack(Material.IRON_INGOT, ThreadLocalRandom.current().nextInt(16, 33)));
+        contents.add(new ItemStack(Material.GOLD_INGOT, ThreadLocalRandom.current().nextInt(12, 25)));
         contents.add(randomReward("wanderer"));
         contents.add(randomReward("wanderer"));
         if (ThreadLocalRandom.current().nextDouble() < 0.20) {
@@ -1315,56 +1452,211 @@ final class RelicEncounterService implements Listener {
         }
         if (currentWaveExpiresAt <= System.currentTimeMillis()) { player.sendMessage(plugin.message("&cThis Angel wave is ending; try again in the next wave.")); return; }
         World world = player.getWorld();
-        Location origin = player.getLocation();
-        Location chosen = null;
-        // Prefer a cave-adjacent safe position; every attempt stays within 100 blocks of the accepting player.
-        for (int i = 0; i < 80; i++) {
-            int dx = ThreadLocalRandom.current().nextInt(-100, 101);
-            int dz = ThreadLocalRandom.current().nextInt(-100, 101);
-            if ((dx * dx) + (dz * dz) > 10000) continue;
-            int x = origin.getBlockX() + dx;
-            int z = origin.getBlockZ() + dz;
-            int y = world.getHighestBlockYAt(x, z) - ThreadLocalRandom.current().nextInt(2, 12);
-            y = Math.max(world.getMinHeight() + 2, y);
-            Location candidate = new Location(world, x + 0.5, y, z + 0.5);
-            if (candidate.getBlock().isPassable() && candidate.clone().add(0, 1, 0).getBlock().isPassable()
-                    && candidate.clone().subtract(0, 1, 0).getBlock().isSolid()) { chosen = candidate; break; }
-        }
-        if (chosen == null) {
-            player.sendMessage(plugin.message("&cNo safe underground cache location was found nearby. Try again."));
+        CacheLocation cacheLocation = findWandererCacheLocation(world, player.getLocation());
+        if (cacheLocation == null) {
+            player.sendMessage(plugin.message("&cNo safe cache location was found within 400 blocks. Try again later."));
             return;
         }
-        chosen.getChunk().load();
+        Location chosen = cacheLocation.location();
         String heartId = UUID.randomUUID().toString();
         long expiresAt = currentWaveExpiresAt;
+        List<ItemStack> contents;
+        try {
+            contents = createWandererCacheContents(player, heartId);
+            if (contents.isEmpty() || contents.stream().anyMatch(item -> item == null || item.getType().isAir() || item.getAmount() <= 0)
+                    || !hasQuestHeart(contents.get(0), heartId)) {
+                throw new IllegalStateException("generated cache contents were incomplete or missing the unique quest Heart");
+            }
+        } catch (RuntimeException ex) {
+            plugin.getLogger().warning("Wanderer cache contents could not be generated for " + player.getUniqueId() + ": " + ex.getMessage());
+            player.sendMessage(plugin.message("&cThe Wanderer could not prepare a complete cache. No quest was accepted."));
+            return;
+        }
         Quest quest = new Quest(player.getUniqueId(), world.getName(), chosen.getBlockX(), chosen.getBlockY(), chosen.getBlockZ(), "wanderer", false, heartId, expiresAt);
+        Set<String> cacheSwordIds = collectShatterSwordIds(contents);
+        if (cacheSwordIds == null || !ShatterSwordIds.registerPaid(paidShatterIds, usedShatterIds, cacheSwordIds)) {
+            plugin.getLogger().severe("Wanderer cache contained an invalid or duplicate Shatter Sword ID for " + player.getUniqueId());
+            player.sendMessage(plugin.message("&cThe Wanderer could not safely register the cache rewards. No quest was accepted."));
+            return;
+        }
+        markShatterItemsPaid(contents, cacheSwordIds);
         quests.put(player.getUniqueId(), quest);
         if (!saveQuest(quest)) {
             quests.remove(player.getUniqueId());
+            paidShatterIds.removeAll(cacheSwordIds);
             state.set("quests." + player.getUniqueId(), null);
+            if (!saveState()) plugin.getLogger().severe("Could not clear failed Wanderer quest acceptance for "
+                    + player.getUniqueId() + "; inspect relic-encounters.yml before retrying.");
             player.sendMessage(plugin.message("&cThe Wanderer quest could not be saved; no cache was created."));
             return;
         }
-        List<ItemStack> contents = createWandererCacheContents(player, heartId);
-        chosen.getBlock().setType(Material.SHULKER_BOX, false);
-        if (chosen.getBlock().getState() instanceof org.bukkit.block.ShulkerBox box) {
-            for (ItemStack item : contents) {
-                Map<Integer, ItemStack> overflow = box.getInventory().addItem(item);
-                for (ItemStack stack : overflow.values()) world.dropItemNaturally(chosen, stack);
+        try {
+            chosen.getBlock().setType(Material.SHULKER_BOX, false);
+            if (chosen.getBlock().getState() instanceof org.bukkit.block.ShulkerBox box) {
+                Inventory snapshot = box.getSnapshotInventory();
+                if (contents.size() > snapshot.getSize()) {
+                    rollbackWandererCache(player, chosen, "cache rewards exceeded the shulker capacity", cacheSwordIds);
+                    return;
+                }
+                ItemStack[] cacheItems = new ItemStack[snapshot.getSize()];
+                for (int slot = 0; slot < contents.size(); slot++) cacheItems[slot] = contents.get(slot).clone();
+                snapshot.setContents(cacheItems);
+                box.getPersistentDataContainer().set(questKey, PersistentDataType.STRING, heartId);
+                if (!box.update(true, false) || !hasPersistedCacheContents(chosen.getBlock(), heartId, contents)) {
+                    rollbackWandererCache(player, chosen, "the shulker inventory did not persist its contents", cacheSwordIds);
+                    return;
+                }
+            } else {
+                rollbackWandererCache(player, chosen, "the cache block could not be initialized", cacheSwordIds);
+                return;
             }
-            box.getPersistentDataContainer().set(questKey, PersistentDataType.STRING, heartId);
-            box.update(true, false);
-        } else {
-            quests.remove(player.getUniqueId());
-            state.set("quests." + player.getUniqueId(), null);
-            chosen.getBlock().setType(Material.AIR, false);
-            saveState();
-            player.sendMessage(plugin.message("&cThe cache block could not be initialized; the quest was not started."));
+        } catch (RuntimeException ex) {
+            rollbackWandererCache(player, chosen, "cache placement failed: " + ex.getMessage(), cacheSwordIds);
             return;
         }
-        player.sendMessage(plugin.message("&dWanderer quest accepted! A cache spawned within 100 blocks. Retrieve its unique Heart of the Sea and submit it at the Wanderer. Cache at &f"
-                + quest.x() + ", " + quest.y() + ", " + quest.z() + " &7(" + quest.world() + ")"));
+        String locationDescription = cacheLocation.surfaceFallback() ? "on the surface" : "underground";
+        player.sendMessage(plugin.message("&dWanderer quest accepted! Your cache spawned " + locationDescription + " within "
+                + cacheLocation.searchRadius() + " blocks. Retrieve its unique Heart of the Sea and submit it to the Wanderer. "
+                + "Cache coordinates: &f" + quest.x() + ", " + quest.y() + ", " + quest.z() + " &7(" + quest.world() + ")."));
         player.playSound(player.getLocation(), Sound.ENTITY_VILLAGER_YES, 0.8f, 1.2f);
+    }
+
+    private CacheLocation findWandererCacheLocation(World world, Location origin) {
+        Set<Long> searchChunks = new HashSet<>();
+        int[][] undergroundBands = {{0, 100}, {100, 300}, {300, 400}};
+        for (int[] band : undergroundBands) {
+            Location underground = findUndergroundCacheLocation(world, origin, band[0], band[1], searchChunks);
+            if (underground != null) {
+                plugin.getLogger().info("Selected underground Wanderer cache location within " + band[1]
+                        + " blocks in " + world.getName() + ".");
+                return new CacheLocation(underground, false, band[1]);
+            }
+        }
+        Location surface = findSurfaceCacheLocation(world, origin, 400, searchChunks);
+        if (surface != null) {
+            plugin.getLogger().warning("No safe underground Wanderer cache location found within 400 blocks; using a surface cache in "
+                    + world.getName() + ".");
+            return new CacheLocation(surface, true, 400);
+        }
+        return null;
+    }
+
+    private Location findUndergroundCacheLocation(World world, Location origin, int minimumRadius, int maximumRadius,
+                                                  Set<Long> searchChunks) {
+        for (int attempt = 0; attempt < 80; attempt++) {
+            double minSquared = minimumRadius * (double) minimumRadius;
+            double maxSquared = maximumRadius * (double) maximumRadius;
+            double distance = Math.sqrt(ThreadLocalRandom.current().nextDouble(minSquared, maxSquared + 1.0));
+            double angle = ThreadLocalRandom.current().nextDouble(0, Math.PI * 2);
+            int x = origin.getBlockX() + (int) Math.round(Math.cos(angle) * distance);
+            int z = origin.getBlockZ() + (int) Math.round(Math.sin(angle) * distance);
+            if (!loadCacheSearchChunk(world, x >> 4, z >> 4, searchChunks)) continue;
+            int surfaceY = world.getHighestBlockYAt(x, z);
+            int y = Math.max(world.getMinHeight() + 2,
+                    surfaceY - ThreadLocalRandom.current().nextInt(2, 25));
+            Location candidate = new Location(world, x + 0.5, y, z + 0.5);
+            if (isSafeCacheBlock(candidate)) return candidate;
+        }
+        return null;
+    }
+
+    private Location findSurfaceCacheLocation(World world, Location origin, int radius, Set<Long> searchChunks) {
+        for (int attempt = 0; attempt < 100; attempt++) {
+            double distance = Math.sqrt(ThreadLocalRandom.current().nextDouble(0, radius * (double) radius + 1.0));
+            double angle = ThreadLocalRandom.current().nextDouble(0, Math.PI * 2);
+            int x = origin.getBlockX() + (int) Math.round(Math.cos(angle) * distance);
+            int z = origin.getBlockZ() + (int) Math.round(Math.sin(angle) * distance);
+            if (!loadCacheSearchChunk(world, x >> 4, z >> 4, searchChunks)) continue;
+            int y = world.getHighestBlockYAt(x, z) + 1;
+            if (y >= world.getMaxHeight() - 1) continue;
+            Location candidate = new Location(world, x + 0.5, y, z + 0.5);
+            if (isSafeCacheBlock(candidate)) return candidate;
+        }
+        return null;
+    }
+
+    private boolean loadCacheSearchChunk(World world, int chunkX, int chunkZ, Set<Long> searchChunks) {
+        if (world.isChunkLoaded(chunkX, chunkZ)) return true;
+        long key = ((long) chunkX << 32) ^ (chunkZ & 0xffffffffL);
+        if (searchChunks.contains(key)) return world.isChunkLoaded(chunkX, chunkZ);
+        if (searchChunks.size() >= 24) return false;
+        searchChunks.add(key);
+        try {
+            return world.getChunkAt(chunkX, chunkZ).load();
+        } catch (RuntimeException ex) {
+            plugin.getLogger().fine("Could not load a bounded Wanderer cache search chunk in " + world.getName()
+                    + " at " + chunkX + ", " + chunkZ + ": " + ex.getMessage());
+            return false;
+        }
+    }
+
+    private boolean isSafeCacheBlock(Location candidate) {
+        Block floor = candidate.clone().subtract(0, 1, 0).getBlock();
+        Material floorType = floor.getType();
+        return candidate.getBlock().getType().isAir()
+                && candidate.clone().add(0, 1, 0).getBlock().getType().isAir()
+                && floorType.isSolid() && floorType != Material.MAGMA_BLOCK
+                && floorType != Material.CAMPFIRE && floorType != Material.SOUL_CAMPFIRE;
+    }
+
+    private Set<String> collectShatterSwordIds(List<ItemStack> items) {
+        Set<String> ids = new LinkedHashSet<>();
+        for (ItemStack item : items) {
+            if (!isShatterSword(item)) continue;
+            String id = item.getItemMeta().getPersistentDataContainer().get(shatterIdKey, PersistentDataType.STRING);
+            if (id == null || id.isBlank() || !ids.add(id)) return null;
+        }
+        return ids;
+    }
+
+    private void markShatterItemsPaid(List<ItemStack> items, Set<String> paidIds) {
+        for (ItemStack item : items) {
+            if (!isShatterSword(item)) continue;
+            ItemMeta meta = item.getItemMeta();
+            String id = meta.getPersistentDataContainer().get(shatterIdKey, PersistentDataType.STRING);
+            if (paidIds.contains(id)) {
+                meta.getPersistentDataContainer().set(shatterPaidKey, PersistentDataType.BYTE, (byte) 1);
+                item.setItemMeta(meta);
+            }
+        }
+    }
+
+    /** Persist paid registration before a direct reward or cache containing the sword is exposed. */
+    private boolean registerPaidShatterRewards(List<ItemStack> items) {
+        Set<String> ids = collectShatterSwordIds(items);
+        if (ids == null || !ShatterSwordIds.registerPaid(paidShatterIds, usedShatterIds, ids)) return false;
+        if (ids.isEmpty()) return true;
+        markShatterItemsPaid(items, ids);
+        if (saveState()) return true;
+        paidShatterIds.removeAll(ids);
+        plugin.getLogger().severe("Shatter Sword reward was not delivered because its paid ID could not be saved.");
+        return false;
+    }
+
+    private boolean hasPersistedCacheContents(Block block, String heartId, List<ItemStack> expected) {
+        if (block.getType() != Material.SHULKER_BOX || !(block.getState() instanceof org.bukkit.block.ShulkerBox placed)) return false;
+        if (!heartId.equals(placed.getPersistentDataContainer().get(questKey, PersistentDataType.STRING))) return false;
+        Inventory inventory = placed.getInventory();
+        for (int slot = 0; slot < expected.size(); slot++) {
+            ItemStack actual = inventory.getItem(slot);
+            ItemStack wanted = expected.get(slot);
+            if (actual == null || !actual.isSimilar(wanted) || actual.getAmount() != wanted.getAmount()) return false;
+        }
+        return true;
+    }
+
+    private void rollbackWandererCache(Player player, Location location, String reason, Set<String> cacheSwordIds) {
+        quests.remove(player.getUniqueId());
+        paidShatterIds.removeAll(cacheSwordIds);
+        state.set("quests." + player.getUniqueId(), null);
+        Block block = location.getBlock();
+        // This location was validated as empty immediately before placement, so any shulker
+        // still here belongs to this failed initialization, even if its PDC update also failed.
+        if (block.getType() == Material.SHULKER_BOX) block.setType(Material.AIR, false);
+        if (!saveState()) plugin.getLogger().severe("Wanderer cache rollback could not be persisted for " + player.getUniqueId()
+                + "; inspect relic-encounters.yml before allowing another cache quest.");
+        plugin.getLogger().warning("Wanderer cache creation rolled back for " + player.getUniqueId() + ": " + reason);
+        player.sendMessage(plugin.message("&cThe cache could not be initialized safely; the quest was not started."));
     }
 
     private void startHuntQuest(Player player) {
@@ -1525,6 +1817,12 @@ final class RelicEncounterService implements Listener {
         rewards.add(relics.createRelic(guaranteedClass, relicAbility(guaranteedClass, guaranteedTier), guaranteedTier));
         rewards.add(randomReward(type));
         rewards.add(randomReward(type));
+        if (!registerPaidShatterRewards(rewards)) {
+            int unregistered = (int) rewards.stream().filter(this::isShatterSword).count();
+            rewards.removeIf(this::isShatterSword);
+            plugin.getLogger().severe("Omitted " + unregistered + " unregistered Shatter Sword reward(s) for "
+                    + player.getUniqueId() + "; all other cache rewards will still be delivered.");
+        }
         for (ItemStack reward : rewards) {
             Map<Integer, ItemStack> overflow = player.getInventory().addItem(reward);
             overflow.values().forEach(item -> player.getWorld().dropItemNaturally(player.getLocation(), item));
@@ -1779,10 +2077,13 @@ final class RelicEncounterService implements Listener {
         ItemStack weapon = attacker.getInventory().getItemInMainHand();
         if (!isShatterSword(weapon)) return;
         String swordId = weapon.getItemMeta().getPersistentDataContainer().get(shatterIdKey, PersistentDataType.STRING);
-        if (swordId == null || !paidShatterIds.contains(swordId) || usedShatterIds.contains(swordId)) return;
+        if (!ShatterSwordIds.canActivate(swordId, paidShatterIds, usedShatterIds)) return;
         if (event.getFinalDamage() <= 0 || swordUseLocks.contains(attacker.getUniqueId())) return;
         List<RelicService.EligibleRelic> eligible = relics.highestTierRelics(target);
         if (eligible.isEmpty()) {
+            UUID attackerId = attacker.getUniqueId();
+            preserveShatterDurabilityOnce.add(attackerId);
+            Bukkit.getScheduler().runTask(plugin, () -> preserveShatterDurabilityOnce.remove(attackerId));
             target.getWorld().strikeLightningEffect(target.getLocation());
             attacker.sendMessage(plugin.message("&7No eligible relic was found; the Shatter Sword remains intact."));
             return;

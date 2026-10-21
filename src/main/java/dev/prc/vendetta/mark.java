@@ -238,6 +238,13 @@ public final class mark extends JavaPlugin implements Listener {
         // A malformed or repeated death dispatch must settle this death only once.
         // The marker is cleared on respawn so later deaths are handled normally.
         if (!deathEventsProcessed.add(victim.getUniqueId())) return;
+        long balanceAtDeath = balance(victim.getUniqueId());
+        if (balanceAtDeath < 0) {
+            String reason = "Died with a negative Marks balance (" + balanceAtDeath + ")";
+            victim.ban(reason, (java.util.Date) null, "VenMark", true);
+            audit("negative-Marks death ban player=" + victim.getUniqueId() + " balance=" + balanceAtDeath);
+            getLogger().warning("Permanently banned " + victim.getUniqueId() + " after death with " + balanceAtDeath + " Marks.");
+        }
         updateSidebar(victim);
         if (event instanceof PlayerDeathEvent playerDeath && qualifiedMobAttacker(victim) != null)
             applyMobCurrencyPenalty(playerDeath, victim);
@@ -1074,10 +1081,9 @@ public final class mark extends JavaPlugin implements Listener {
         }
     }
 
-    boolean triggerAngelEscape() {
-        if (relicEncounters == null) return false;
-        relicEncounters.triggerManualWave();
-        return true;
+    AngelWaveSpawnResult triggerAngelEscape() {
+        if (relicEncounters == null) return null;
+        return relicEncounters.triggerManualWave();
     }
 
     boolean classChangerEnabled() { return getConfig().getBoolean("settings.classChanger", false); }
