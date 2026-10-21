@@ -20,9 +20,9 @@ class AncientGuardianSidebarTest {
         List<String> sidebar = AncientGuardianSidebar.lines("WardenCaster", cards.entries(), 0, 321);
         String rendered = plain(String.join("\n", sidebar));
         assertTrue(plain(String.join(" ", sidebar)).contains("Ancient Guardian activated by WardenCaster:"));
-        assertTrue(rendered.contains("Steve 1 (1.1x)"));
-        assertTrue(rendered.contains("Alex 18 (2.8x)"));
-        assertTrue(rendered.contains("Zombie [MOB] 19 (2.9x)"));
+        assertTrue(rendered.contains("Steve 1 (1.01x)"));
+        assertTrue(rendered.contains("Alex 18 (1.18x)"));
+        assertTrue(rendered.contains("Zombie [MOB] 19 (1.19x)"));
         assertFalse(rendered.contains("Steve [MOB]"));
     }
 
@@ -50,12 +50,34 @@ class AncientGuardianSidebarTest {
 
     @Test
     void formatsMultipliersAtRequiredStackBoundaries() {
-        assertTrue(plain(WardenRules.cardEntryLine("Zero", 0, false)).contains("Zero 0 (1.0x)"));
-        assertTrue(plain(WardenRules.cardEntryLine("One", 1, false)).contains("One 1 (1.1x)"));
-        assertTrue(plain(WardenRules.cardEntryLine("Five", 5, false)).contains("Five 5 (1.5x)"));
-        assertTrue(plain(WardenRules.cardEntryLine("Eighteen", 18, false)).contains("Eighteen 18 (2.8x)"));
-        assertTrue(plain(WardenRules.cardEntryLine("Fifty", 50, false)).contains("Fifty 50 (6.0x)"));
-        assertTrue(plain(WardenRules.cardEntryLine("Zombie", 19, true)).contains("Zombie [MOB] 19 (2.9x)"));
+        assertTrue(plain(WardenRules.cardEntryLine("Zero", 0, false)).contains("Zero 0 (1.00x)"));
+        assertTrue(plain(WardenRules.cardEntryLine("One", 1, false)).contains("One 1 (1.01x)"));
+        assertTrue(plain(WardenRules.cardEntryLine("Five", 5, false)).contains("Five 5 (1.05x)"));
+        assertTrue(plain(WardenRules.cardEntryLine("Eighteen", 18, false)).contains("Eighteen 18 (1.18x)"));
+        assertTrue(plain(WardenRules.cardEntryLine("Fifty", 50, false)).contains("Fifty 50 (1.50x)"));
+        assertTrue(plain(WardenRules.cardEntryLine("Zombie", 19, true)).contains("Zombie [MOB] 19 (1.19x)"));
+    }
+
+    @Test
+    void visibilityRequiresTheActiveWardenCasterAndEndsWhenInactive() {
+        UUID caster = UUID.randomUUID();
+        UUID otherWarden = UUID.randomUUID();
+        assertFalse(AncientGuardianSidebar.visible(false, "warden", caster, caster));
+        assertFalse(AncientGuardianSidebar.visible(true, "vanguard", caster, caster));
+        assertFalse(AncientGuardianSidebar.visible(true, "phantom", caster, caster));
+        assertFalse(AncientGuardianSidebar.visible(true, "warden", otherWarden, caster));
+        assertTrue(AncientGuardianSidebar.visible(true, "warden", caster, caster));
+        assertFalse(AncientGuardianSidebar.visible(false, "warden", caster, caster));
+    }
+
+    @Test
+    void inactiveSidebarKeepsPersonalMarksAndHasNoGuardianContent() {
+        List<String> lines = MarksSidebarLayout.inactive(725, MarksLeaderboard.lines(List.of()));
+        String rendered = String.join("\n", lines);
+        assertTrue(rendered.contains("&eMarks: &f725"));
+        assertTrue(rendered.contains("--- MARKS TOP ---"));
+        assertFalse(rendered.contains("Ancient Guardian"));
+        assertFalse(rendered.contains("AG Cards"));
     }
 
     private String plain(String value) {

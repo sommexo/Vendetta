@@ -17,7 +17,8 @@ final class AncientGuardianSidebar {
         return (cards.size() + pagedCapacity - 1) / pagedCapacity;
     }
 
-    static List<String> lines(String caster, List<GuardianCardLedger.Card> cards, int requestedPage, long marks) {
+    static List<String> lines(String caster, List<GuardianCardLedger.Card> cards, int requestedPage, long marks,
+                              List<String> leaderboardLines) {
         List<String> lines = header(caster);
         lines.add("&bCards:");
         if (cards.isEmpty()) {
@@ -35,7 +36,16 @@ final class AncientGuardianSidebar {
             if (pages > 1) lines.add("&8Page " + (page + 1) + "/" + pages);
         }
         lines.add("&eMarks: &f" + marks);
+        lines.addAll(leaderboardLines);
         return List.copyOf(lines);
+    }
+
+    static List<String> lines(String caster, List<GuardianCardLedger.Card> cards, int requestedPage, long marks) {
+        return lines(caster, cards, requestedPage, marks, MarksLeaderboard.lines(List.of()));
+    }
+
+    static boolean visible(boolean active, String playerClass, java.util.UUID viewer, java.util.UUID caster) {
+        return active && "warden".equals(playerClass) && viewer != null && viewer.equals(caster);
     }
 
     private static List<String> header(String caster) {
@@ -47,8 +57,8 @@ final class AncientGuardianSidebar {
 
     private static int entryCapacity(String caster, boolean hasPageFooter) {
         int headerLines = header(caster).size();
-        // Header, Cards label, Marks line, and optionally the page footer use reserved rows.
-        return MAX_LINES - headerLines - 2 - (hasPageFooter ? 1 : 0);
+        // Reserve Marks plus the leaderboard heading and its five ranked entries.
+        return MAX_LINES - headerLines - 1 - 7 - (hasPageFooter ? 1 : 0);
     }
 
     private static String safeName(String name, int maxLength) {

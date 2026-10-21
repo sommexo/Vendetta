@@ -184,6 +184,14 @@ public final class mark extends JavaPlugin implements Listener {
     public void onJoin(PlayerJoinEvent event) {
         balances.putIfAbsent(event.getPlayer().getUniqueId(), 0L);
         showBalance(event.getPlayer());
+        refreshAllSidebars();
+    }
+
+    @EventHandler
+    public void onRespawn(PlayerRespawnEvent event) {
+        getServer().getScheduler().runTask(this, () -> {
+            if (event.getPlayer().isOnline()) updateSidebar(event.getPlayer());
+        });
     }
 
     @EventHandler
@@ -230,6 +238,7 @@ public final class mark extends JavaPlugin implements Listener {
         // A malformed or repeated death dispatch must settle this death only once.
         // The marker is cleared on respawn so later deaths are handled normally.
         if (!deathEventsProcessed.add(victim.getUniqueId())) return;
+        updateSidebar(victim);
         if (event instanceof PlayerDeathEvent playerDeath && qualifiedMobAttacker(victim) != null)
             applyMobCurrencyPenalty(playerDeath, victim);
         if (qualifiedMobAttacker(victim) != null) return;
@@ -664,6 +673,7 @@ public final class mark extends JavaPlugin implements Listener {
         if (vanguardAbilities != null) vanguardAbilities.classChanged(player);
         if (classAbilities != null) classAbilities.classChanged(player);
         if (wardenUltimates != null) wardenUltimates.classChanged(player);
+        updateSidebar(player);
     }
     long bankRoom(UUID uuid) {
         long current = balance(uuid);
@@ -913,8 +923,8 @@ public final class mark extends JavaPlugin implements Listener {
             getLogger().severe("Could not persist balance part of idempotent Marks credit " + transactionId);
             return false;
         }
+        refreshAllSidebars();
         Player player = getServer().getPlayer(uuid);
-        if (player != null) updateSidebar(player);
         if (player != null && overflow > 0)
             player.sendMessage(color("&e" + overflow + " Marks overflowed the bank cap and were saved as pending credit."));
         if (reason.startsWith("admin")) audit(reason + " amount=" + amount + " player=" + uuid);
@@ -937,8 +947,7 @@ public final class mark extends JavaPlugin implements Listener {
             balanceData.set(marker, null);
             return false;
         }
-        Player player = getServer().getPlayer(uuid);
-        if (player != null) updateSidebar(player);
+        refreshAllSidebars();
         return true;
     }
 
@@ -995,8 +1004,7 @@ public final class mark extends JavaPlugin implements Listener {
             balanceData.set(receipt, null);
             return false;
         }
-        Player player = getServer().getPlayer(uuid);
-        if (player != null) updateSidebar(player);
+        refreshAllSidebars();
         return true;
     }
 
@@ -1016,8 +1024,7 @@ public final class mark extends JavaPlugin implements Listener {
             getLogger().severe("Could not save Wanderer failure penalty for " + uuid);
             return false;
         }
-        Player player = getServer().getPlayer(uuid);
-        if (player != null) updateSidebar(player);
+        refreshAllSidebars();
         return true;
     }
     void resetMarks(UUID uuid, String actor) {
@@ -1094,8 +1101,7 @@ public final class mark extends JavaPlugin implements Listener {
         balances.put(uuid, Math.max(0L, Math.min(MAX_BANK, amount)));
         balanceData.set(uuid.toString(), balances.get(uuid));
         saveBalances();
-        Player player = getServer().getPlayer(uuid);
-        if (player != null) updateSidebar(player);
+        refreshAllSidebars();
     }
     private boolean persistBalance(UUID uuid, long amount) {
         if (amount < 0) return false;
@@ -1113,8 +1119,7 @@ public final class mark extends JavaPlugin implements Listener {
             getLogger().severe("Transaction balance save failed for " + uuid);
             return false;
         }
-        Player player = getServer().getPlayer(uuid);
-        if (player != null) updateSidebar(player);
+        refreshAllSidebars();
         return true;
     }
 
@@ -1193,18 +1198,38 @@ public final class mark extends JavaPlugin implements Listener {
         for (String entry : objective.getScoreboard().getEntries()) objective.getScoreboard().resetScores(entry);
         UUID playerId = player.getUniqueId();
         List<String> lines;
-        if (wardenUltimates != null && wardenUltimates.hasActiveGuardian(playerId)) {
+        boolean hasActiveGuardian = wardenUltimates != null && wardenUltimates.hasActiveGuardian(playerId);
+        UUID activeCaster = hasActiveGuardian ? playerId : null;
+        if (AncientGuardianSidebar.visible(hasActiveGuardian, selectedClass(playerId), playerId, activeCaster)) {
             List<GuardianCardLedger.Card> cards = wardenUltimates.cards(playerId);
             int pages = wardenUltimates.sidebarPages(playerId);
             int page = Math.floorMod(guardianSidebarPages.getOrDefault(playerId, 0), pages);
             guardianSidebarPages.put(playerId, page);
-            lines = AncientGuardianSidebar.lines(wardenUltimates.casterName(playerId), cards, page, balance(playerId));
+            lines = AncientGuardianSidebar.lines(wardenUltimates.casterName(playerId), cards, page, balance(playerId),
+                    leaderboardLines());
         } else {
             guardianSidebarPages.remove(playerId);
-            lines = List.of(WardenRules.cardDisplayLine(0), "&eMarks: &f" + balance(playerId));
+            lines = MarksSidebarLayout.inactive(balance(playerId), leaderboardLines());
         }
         int score = lines.size();
         for (String line : lines) objective.getScore(color(line)).setScore(score--);
+    }
+
+    private List<String> leaderboardLines() {
+        List<MarksLeaderboard.Entry> entries = new ArrayList<>();
+        for (Map.Entry<UUID, Long> balance : balances.entrySet()) {
+            UUID id = balance.getKey();
+            Player online = getServer().getPlayer(id);
+            OfflinePlayer offline = online == null ? getServer().getOfflinePlayer(id) : null;
+            String name = online != null ? online.getName() : offline == null ? null : offline.getName();
+            if (name == null || name.isBlank()) name = "Unknown-" + id.toString().substring(0, 8);
+            entries.add(new MarksLeaderboard.Entry(id, name, balance.getValue()));
+        }
+        return MarksLeaderboard.lines(entries);
+    }
+
+    private void refreshAllSidebars() {
+        for (Player online : getServer().getOnlinePlayers()) updateSidebar(online);
     }
 
     private void advanceGuardianSidebarPages() {

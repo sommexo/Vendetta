@@ -51,7 +51,7 @@ class GuardianCardLedgerTest {
         cards.addHit(enemy, "", false);
         assertEquals("Alex", cards.entries().get(0).name());
         assertTrue(AncientGuardianSidebar.lines("Steve", cards.entries(), 0, 12).stream()
-                .anyMatch(line -> line.contains("Alex 2 (1.2x)")));
+                .anyMatch(line -> line.contains("Alex 2 (1.02x)")));
         assertTrue(cards.remove(enemy));
         assertTrue(AncientGuardianSidebar.lines("Steve", cards.entries(), 0, 12).stream()
                 .noneMatch(line -> line.contains("Alex")));
