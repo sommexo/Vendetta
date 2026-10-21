@@ -12,6 +12,7 @@ import org.bukkit.event.Listener;
 import org.bukkit.event.block.Action;
 import org.bukkit.block.Block;
 import org.bukkit.block.Container;
+import org.bukkit.inventory.meta.BlockStateMeta;
 import org.bukkit.configuration.file.YamlConfiguration;
 import org.bukkit.event.inventory.InventoryClickEvent;
 import org.bukkit.event.inventory.InventoryDragEvent;
@@ -37,12 +38,12 @@ import java.io.IOException;
 import java.util.HashSet;
 import java.util.Set;
 
-/** Relic identity, validation, exploration discovery, and Marks-priced cleric offers. */
+/** Relic identity, validation, and exploration discovery. */
 final class RelicService implements Listener {
     private final mark plugin;
     private final VanguardProgression progression;
     private final ClassProgression classProgression;
-    private final NamespacedKey classKey, abilityKey, tierKey, tierIdKey, relicIdKey, formatKey, priceKey, shopKey, merchantKey;
+    private final NamespacedKey classKey, abilityKey, tierKey, tierIdKey, relicIdKey, formatKey;
     private final File exploredFile;
     private final File relicIdentityFile;
     private final YamlConfiguration exploredData;
@@ -54,6 +55,8 @@ final class RelicService implements Listener {
     private final Set<java.util.UUID> abilityMenuLocks = new HashSet<>();
     private final Set<java.util.UUID> relicUseGuard = new HashSet<>();
 
+    record EligibleRelic(String clazz, String ability, int tier) { }
+
     RelicService(mark plugin, VanguardProgression progression, ClassProgression classProgression) {
         this.plugin = plugin;
         this.progression = progression;
@@ -64,14 +67,11 @@ final class RelicService implements Listener {
         tierIdKey = new NamespacedKey(plugin, "relic_tier_id");
         relicIdKey = new NamespacedKey(plugin, "relic_id");
         formatKey = new NamespacedKey(plugin, "relic_format");
-        priceKey = new NamespacedKey(plugin, "relic_price");
-        shopKey = new NamespacedKey(plugin, "relic_shop");
-        merchantKey = new NamespacedKey(plugin, "relic_merchant");
         exploredFile = new File(plugin.getDataFolder(), "explored-chests.yml");
-        exploredData = YamlConfiguration.loadConfiguration(exploredFile);
+        exploredData = SafeYaml.load(exploredFile);
         explored.addAll(exploredData.getStringList("opened"));
         relicIdentityFile = new File(plugin.getDataFolder(), "relic-identities.yml");
-        relicIdentityData = YamlConfiguration.loadConfiguration(relicIdentityFile);
+        relicIdentityData = SafeYaml.load(relicIdentityFile);
         issuedRelics.addAll(relicIdentityData.getStringList("issued"));
         consumedRelics.addAll(relicIdentityData.getStringList("consumed"));
     }
@@ -85,6 +85,11 @@ final class RelicService implements Listener {
         String selectedClass = plugin.selectedClass(player.getUniqueId());
         String ability = meta.getPersistentDataContainer().get(abilityKey, PersistentDataType.STRING);
         if ("headweb".equals(ability)) ability = "bloodthirst";
+        if (plugin.isRelicDisabled(player.getUniqueId(), ability)) {
+            event.setCancelled(true);
+            player.sendMessage(plugin.message("&cThat relic ability is disabled for now."));
+            return;
+        }
         String clazz = meta.getPersistentDataContainer().get(classKey, PersistentDataType.STRING);
         int tier = meta.getPersistentDataContainer().getOrDefault(tierKey, PersistentDataType.INTEGER, 0);
         EquipmentSlot hand = event.getHand();
@@ -130,6 +135,86 @@ final class RelicService implements Listener {
         String relicId = pdc.get(relicIdKey, PersistentDataType.STRING);
         if (!issuedRelics.contains(relicId) || consumedRelics.contains(relicId)) return false;
         return true;
+    }
+
+    boolean isGenuineRelicItem(ItemStack item) {
+        if (item == null || !item.hasItemMeta()) return false;
+        var pdc = item.getItemMeta().getPersistentDataContainer();
+        return isGenuineRelic(item, pdc.get(classKey, PersistentDataType.STRING),
+                pdc.get(abilityKey, PersistentDataType.STRING),
+                pdc.getOrDefault(tierKey, PersistentDataType.INTEGER, 0));
+    }
+
+    int removeGenuineRelics(Player player) {
+        int removed = removeGenuineRelics(player.getInventory().getContents(), player.getInventory()::setItem);
+        removed += removeGenuineRelics(player.getEnderChest().getContents(), player.getEnderChest()::setItem);
+        // Applied relics are represented by ability tiers rather than items. Clear only tier
+        // records; class selection, cooldowns, kill streaks, and other progression survive.
+        VanguardProgression.PlayerData data = progression.get(player.getUniqueId());
+        data.berserker = VanguardProgression.Upgrade.DORMANT;
+        data.bloodthirst = VanguardProgression.Upgrade.DORMANT;
+        data.ultimate = VanguardProgression.Upgrade.DORMANT;
+        progression.save(player.getUniqueId());
+        for (String ability : List.of("predators_instinct", "marked_prey", "into_the_void", "afterimage",
+                "unshaken", "sculk_pulse", "ancient_guardian", "unyielding")) {
+            classProgression.tier(player.getUniqueId(), ability, VanguardProgression.Upgrade.DORMANT);
+        }
+        classProgression.save(player.getUniqueId());
+        return removed;
+    }
+
+    List<EligibleRelic> highestTierRelics(Player player) {
+        String clazz = plugin.selectedClass(player.getUniqueId());
+        if (clazz == null) return List.of();
+        List<EligibleRelic> eligible = new ArrayList<>();
+        if (clazz.equals("vanguard")) {
+            VanguardProgression.PlayerData data = progression.get(player.getUniqueId());
+            addEligible(eligible, clazz, "berserker", data.berserker);
+            addEligible(eligible, clazz, "bloodthirst", data.bloodthirst);
+            addEligible(eligible, clazz, "ultimate", data.ultimate);
+        } else {
+            List<String> abilities = clazz.equals("phantom")
+                    ? List.of("predators_instinct", "marked_prey", "into_the_void", "afterimage")
+                    : List.of("unshaken", "sculk_pulse", "ancient_guardian", "unyielding");
+            for (String ability : abilities) addEligible(eligible, clazz, ability,
+                    classProgression.tier(player.getUniqueId(), ability));
+        }
+        eligible.removeIf(relic -> plugin.isRelicDisabled(player.getUniqueId(), relic.ability()));
+        int highest = eligible.stream().mapToInt(EligibleRelic::tier).max().orElse(0);
+        return eligible.stream().filter(relic -> relic.tier() == highest).toList();
+    }
+
+    private void addEligible(List<EligibleRelic> list, String clazz, String ability, VanguardProgression.Upgrade tier) {
+        int numeric = switch (tier) {
+            case IMPERFECT -> 1; case PERFECT -> 2; case ASCENDANT -> 3; default -> 0;
+        };
+        if (numeric > 0) list.add(new EligibleRelic(clazz, ability, numeric));
+    }
+
+    private int removeGenuineRelics(ItemStack[] contents, java.util.function.BiConsumer<Integer, ItemStack> setter) {
+        int removed = 0;
+        for (int slot = 0; slot < contents.length; slot++) {
+            ItemStack item = contents[slot];
+            if (isGenuineRelicItem(item)) {
+                setter.accept(slot, null);
+                removed++;
+                continue;
+            }
+            if (item == null || !item.hasItemMeta() || !(item.getItemMeta() instanceof BlockStateMeta meta)) continue;
+            org.bukkit.block.BlockState nestedState = meta.getBlockState();
+            if (!(nestedState instanceof Container container)) continue;
+            ItemStack[] nested = container.getInventory().getContents();
+            int nestedRemoved = removeGenuineRelics(nested, container.getInventory()::setItem);
+            if (nestedRemoved > 0) {
+                container.update(true, false);
+                meta.setBlockState(nestedState);
+                item.setItemMeta(meta);
+                contents[slot] = item;
+                setter.accept(slot, item);
+                removed += nestedRemoved;
+            }
+        }
+        return removed;
     }
 
     boolean validRelicDefinition(String clazz, String ability, int tier) {
@@ -316,117 +401,6 @@ final class RelicService implements Listener {
 
     private String tierName(int tier) { return switch (tier) { case 1 -> "Imperfect"; case 2 -> "Perfect"; case 3 -> "Ascendant"; default -> "Invalid"; }; }
 
-    @EventHandler
-    public void onNaturalClericSpawn(CreatureSpawnEvent event) {
-        if (!(event.getEntity() instanceof Villager villager) || event.getSpawnReason() != CreatureSpawnEvent.SpawnReason.NATURAL) return;
-        // A natural villager normally receives its profession later, after a job-site interaction.
-        // Mark the natural villager at spawn so the marker survives until it becomes a cleric.
-        villager.getPersistentDataContainer().set(merchantKey, PersistentDataType.BYTE, (byte) 1);
-    }
-
-    @EventHandler(ignoreCancelled = true)
-    public void onCleric(PlayerInteractEntityEvent event) {
-        if (!(event.getRightClicked() instanceof Villager villager) || villager.getProfession() != Villager.Profession.CLERIC
-                || !villager.getPersistentDataContainer().has(merchantKey, PersistentDataType.BYTE)) return;
-        event.setCancelled(true);
-        openRelicShop(event.getPlayer(), villager);
-    }
-
-    private void openRelicShop(Player player, Villager villager) {
-        Inventory inventory = Bukkit.createInventory(new RelicShopHolder(), 27, ChatColor.DARK_PURPLE + "Cleric Relics");
-        RelicShopHolder holder = (RelicShopHolder) inventory.getHolder();
-        holder.inventory = inventory;
-        holder.merchant = villager;
-        holder.villagerLevel = villager.getVillagerLevel();
-        int[] slots = {11, 13, 15};
-        int offerIndex = 0;
-        for (RelicMerchantRules.Offer offer : RelicMerchantRules.offers(holder.villagerLevel)) {
-            String relicClass = offer.relicClass();
-            int tier = offer.relicTier();
-            int slot = slots[offerIndex++];
-            String ability = merchantAbility(relicClass, tier);
-            long price = tier == 1 ? 1000 : 2000;
-            ItemStack item = createRelic(relicClass, ability, tier);
-            ItemMeta meta = item.getItemMeta();
-            meta.getPersistentDataContainer().set(priceKey, PersistentDataType.LONG, price);
-            meta.getPersistentDataContainer().set(shopKey, PersistentDataType.BYTE, (byte) 1);
-            List<String> lore = new ArrayList<>();
-            lore.add(ChatColor.GRAY + "Price: " + ChatColor.GOLD + (tier == 1 ? "1 genuine VenMark Nether Star (1,000 Marks)" : tier == 2 ? "2 genuine VenMark Nether Stars (2,000 Marks)" : "2 genuine VenMark Nether Stars (2,000 Marks) + " + requiredNetherite(relicClass)));
-            lore.add(ChatColor.GRAY + "Class: " + capitalize(relicClass) + " | Ability: " + abilityDescription(relicClass, ability));
-            lore.add(ChatColor.YELLOW + "Click to purchase");
-            meta.setLore(lore);
-            item.setItemMeta(meta);
-            inventory.setItem(slot, item);
-        }
-        player.openInventory(inventory);
-    }
-
-    private String merchantAbility(String relicClass, int tier) {
-        if (tier == 3 && "vanguard".equals(relicClass)) return "ultimate";
-        return "vanguard".equals(relicClass) ? "select" : "class_relic";
-    }
-
-    @EventHandler(ignoreCancelled = true)
-    public void onShopClick(InventoryClickEvent event) {
-        if (!(event.getView().getTopInventory().getHolder() instanceof RelicShopHolder)) return;
-        event.setCancelled(true);
-        if (!(event.getWhoClicked() instanceof Player player) || event.getRawSlot() >= event.getView().getTopInventory().getSize()) return;
-        RelicShopHolder holder = (RelicShopHolder) event.getView().getTopInventory().getHolder();
-        Villager merchant = holder.merchant;
-        if (merchant == null || !merchant.isValid() || merchant.getProfession() != Villager.Profession.CLERIC
-                || !merchant.getPersistentDataContainer().has(merchantKey, PersistentDataType.BYTE)) {
-            player.closeInventory();
-            player.sendMessage(plugin.message("&cThis relic merchant is no longer available."));
-            return;
-        }
-        if (merchant.getVillagerLevel() != holder.villagerLevel) {
-            player.closeInventory();
-            player.sendMessage(plugin.message("&eThe cleric's level changed; its relic offers have been refreshed."));
-            openRelicShop(player, merchant);
-            return;
-        }
-        if (!purchaseLocks.add(player.getUniqueId())) return;
-        try {
-        ItemStack item = event.getCurrentItem();
-        if (item == null || !item.hasItemMeta()) return;
-        ItemMeta meta = item.getItemMeta();
-        if (!meta.getPersistentDataContainer().has(shopKey, PersistentDataType.BYTE)) return;
-        int tier = meta.getPersistentDataContainer().getOrDefault(tierKey, PersistentDataType.INTEGER, 0);
-        String relicClass = meta.getPersistentDataContainer().get(classKey, PersistentDataType.STRING);
-        String ability = meta.getPersistentDataContainer().get(abilityKey, PersistentDataType.STRING);
-        if (relicClass == null || ability == null || !isGenuineRelic(item, relicClass, ability, tier)
-                || item.getAmount() != 1 || !relicClass.equals(plugin.selectedClass(player.getUniqueId()))
-                || !eligible(player, ability, tier)) {
-            player.sendMessage(plugin.message("&cThis relic does not match your class or current progression.")); return;
-        }
-        Material extra = tier == 3 ? requiredMaterial(relicClass) : null;
-        if (tier < 1 || tier > 3 || (tier == 3 && extra == null)) return;
-        ItemStack relic = item.clone();
-        ItemMeta relicMeta = relic.getItemMeta();
-        relicMeta.getPersistentDataContainer().remove(priceKey);
-        relicMeta.getPersistentDataContainer().remove(shopKey);
-        relicMeta.setLore(List.of(ChatColor.GRAY + "Class: " + capitalize(relicClass), ChatColor.GRAY + "Ability: " + capitalize(ability), ChatColor.GRAY + "Right-click to apply"));
-        relic.setItemMeta(relicMeta);
-        if (!plugin.purchaseRelic(player, tier, extra, relic)) {
-            player.sendMessage(plugin.message(tier == 3
-                    ? "&cPurchase failed. Requires two genuine VenMark Nether Stars, the class Netherite item, and enough inventory space; nothing was charged."
-                    : "&cPurchase failed. Requires " + (tier == 1 ? "one" : "two") + " genuine VenMark Nether Star(s) and enough inventory space; nothing was charged."));
-            return;
-        }
-        event.getView().getTopInventory().setItem(event.getRawSlot(), null);
-        player.sendMessage(plugin.message(tier == 3
-                ? "&aAscendant relic purchased. Paid two genuine 1,000-Mark Nether Stars and " + extra.name().replace('_', ' ') + "."
-                : "&aRelic purchased using " + (tier == 1 ? "one genuine 1,000-Mark Nether Star." : "two genuine 1,000-Mark Nether Stars.")));
-        } finally {
-            purchaseLocks.remove(player.getUniqueId());
-        }
-    }
-
-    @EventHandler(ignoreCancelled = true)
-    public void onShopDrag(InventoryDragEvent event) {
-        if (event.getView().getTopInventory().getHolder() instanceof RelicShopHolder) event.setCancelled(true);
-    }
-
     @EventHandler(ignoreCancelled = true)
     public void onExplore(PlayerInteractEvent event) {
         if (event.getAction() != Action.RIGHT_CLICK_BLOCK || event.getClickedBlock() == null) return;
@@ -435,7 +409,7 @@ final class RelicService implements Listener {
         String location = block.getWorld().getUID() + ":" + block.getX() + ":" + block.getY() + ":" + block.getZ();
         if (!explored.add(location)) return;
         exploredData.set("opened", List.copyOf(explored));
-        try { exploredData.save(exploredFile); } catch (IOException ex) { plugin.getLogger().warning("Could not save explored chest state: " + ex.getMessage()); }
+        try { SafeYaml.saveAtomically(exploredData, exploredFile); } catch (IOException ex) { plugin.getLogger().warning("Could not save explored chest state: " + ex.getMessage()); }
         double chance = plugin.getConfig().getDouble("relics.exploration-drop-chance", 0.002);
         if (ThreadLocalRandom.current().nextDouble() >= chance) return;
         int tier = ThreadLocalRandom.current().nextDouble() < plugin.getConfig().getDouble("relics.exploration-perfect-chance", 0.05) ? 2 : 1;
@@ -494,7 +468,7 @@ final class RelicService implements Listener {
         relicIdentityData.set("format-version", 1);
         relicIdentityData.set("issued", List.copyOf(issuedRelics));
         relicIdentityData.set("consumed", List.copyOf(consumedRelics));
-        try { relicIdentityData.save(relicIdentityFile); return true; }
+        try { SafeYaml.saveAtomically(relicIdentityData, relicIdentityFile); return true; }
         catch (IOException ex) { plugin.getLogger().severe("Could not save relic identity ledger: " + ex.getMessage()); return false; }
     }
 
@@ -577,12 +551,6 @@ final class RelicService implements Listener {
             this.relicTier = relicTier;
             this.className = className;
         }
-        @Override public Inventory getInventory() { return inventory; }
-    }
-    private static final class RelicShopHolder implements InventoryHolder {
-        Inventory inventory;
-        Villager merchant;
-        int villagerLevel;
         @Override public Inventory getInventory() { return inventory; }
     }
 }

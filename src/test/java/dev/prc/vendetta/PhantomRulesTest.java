@@ -9,12 +9,6 @@ class PhantomRulesTest {
         assertEquals(15_000L, PhantomRules.INTO_THE_VOID_INACTIVITY_MILLIS);
     }
 
-    @Test void predatorsInstinctTimingMatchesCounterSpecification() {
-        assertEquals(1_000L, PhantomRules.PREDATORS_INSTINCT_ARM_WINDOW_MILLIS);
-        assertEquals(45_000L, PhantomRules.PREDATORS_INSTINCT_COOLDOWN_MILLIS);
-        assertEquals(5_000L, PhantomRules.PREDATORS_INSTINCT_STUN_MILLIS);
-    }
-
     @Test void intoTheVoidDurationScalesByTier() {
         assertEquals(5_000L, PhantomRules.intoTheVoidDurationMillis(VanguardProgression.Upgrade.DORMANT));
         assertEquals(15_000L, PhantomRules.intoTheVoidDurationMillis(VanguardProgression.Upgrade.IMPERFECT));

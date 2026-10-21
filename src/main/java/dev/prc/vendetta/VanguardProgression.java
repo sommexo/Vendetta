@@ -29,7 +29,7 @@ final class VanguardProgression {
 
     VanguardProgression(File dataFolder) {
         file = new File(dataFolder, "vanguard-data.yml");
-        yaml = YamlConfiguration.loadConfiguration(file);
+        yaml = SafeYaml.load(file);
         int schema = yaml.getInt("_schema-version", 0);
         if (schema > 1) throw new IllegalStateException("vanguard-data.yml was written by a newer VenMark version (schema " + schema + ")");
         for (String id : yaml.getKeys(false)) {
@@ -70,7 +70,7 @@ final class VanguardProgression {
         yaml.set(root + "ascendant-kill-streak", data.ascendantKillStreak);
         // Keep the old key readable by older administrative tooling.
         yaml.set(root + "kill-streak", data.ascendantKillStreak);
-        try { yaml.save(file); } catch (IOException ex) { throw new IllegalStateException("Could not save Vanguard progression", ex); }
+        try { SafeYaml.saveAtomically(yaml, file); } catch (IOException ex) { throw new IllegalStateException("Could not save Vanguard progression", ex); }
     }
     void saveAll() { for (UUID uuid : players.keySet()) save(uuid); }
     private Upgrade readUpgrade(String path, String legacyPath) {

@@ -53,16 +53,6 @@ final class VanguardAbilityListener implements Listener {
         if (data.bloodthirstReadyAt > now && !plugin.opCooldownBypass(player)) return;
         if (counterWindows.getOrDefault(player.getUniqueId(), 0L) > now) return;
         long deadline = now + counterWindowMillis(data.bloodthirst);
-        long oldCooldown = data.bloodthirstReadyAt;
-        data.bloodthirstReadyAt = now
-                + plugin.getConfig().getLong("vanguard.bloodthirst.cooldown-seconds", 45) * 1000L;
-        try { progress.save(player.getUniqueId()); }
-        catch (RuntimeException ex) {
-            data.bloodthirstReadyAt = oldCooldown;
-            try { progress.save(player.getUniqueId()); } catch (RuntimeException rollback) { ex.addSuppressed(rollback); }
-            plugin.getLogger().severe("Could not save Bloodthirst cooldown for " + player.getUniqueId() + ": " + ex.getMessage());
-            return;
-        }
         counterWindows.put(player.getUniqueId(), deadline);
         player.sendMessage(plugin.message("&bBloodthirst armed"));
         plugin.getServer().getScheduler().runTaskLater(plugin, () -> {
@@ -74,6 +64,8 @@ final class VanguardAbilityListener implements Listener {
     public void onDamage(EntityDamageEvent event) {
         Player victim = event.getEntity() instanceof Player p ? p : null;
         LivingEntity source = attacker(event);
+        if ((victim != null && plugin.isRelicDisabled(victim.getUniqueId()))
+                || (source instanceof Player sourcePlayer && plugin.isRelicDisabled(sourcePlayer.getUniqueId()))) return;
         Player attacker = source instanceof Player p ? p : null;
         long now = System.currentTimeMillis();
         if (victim != null && event instanceof EntityDamageByEntityEvent && attacker != null && attacker != victim) {
@@ -95,7 +87,8 @@ final class VanguardAbilityListener implements Listener {
         }
 
         // Bloodthirst can only counter a direct attacker while the Vanguard is crouching with a sword.
-        if (victim != null && source != null && source != victim && isVanguard(victim) && victim.isSneaking()
+        if (victim != null && source != null && source != victim && isVanguard(victim)
+                && !plugin.isRelicDisabled(victim.getUniqueId(), "bloodthirst") && victim.isSneaking()
                 && event instanceof EntityDamageByEntityEvent && eligibleCombatDamage(event)
                 && isSword(victim.getInventory().getItemInMainHand())
                 && counterWindows.getOrDefault(victim.getUniqueId(), 0L) >= now) {
@@ -103,7 +96,8 @@ final class VanguardAbilityListener implements Listener {
             triggerBloodthirst(victim);
         }
 
-        if (!(event instanceof EntityDamageByEntityEvent) || attacker == null || !isVanguard(attacker) || !isVanguardWeapon(attacker.getInventory().getItemInMainHand())
+        if (!(event instanceof EntityDamageByEntityEvent) || attacker == null || !isVanguard(attacker)
+                || plugin.isRelicDisabled(attacker.getUniqueId(), "berserker") || !isVanguardWeapon(attacker.getInventory().getItemInMainHand())
                 || activeUltimates.contains(attacker.getUniqueId()) || !eligibleCombatDamage(event)) return;
         applyBerserker(attacker, event);
     }
@@ -163,6 +157,7 @@ final class VanguardAbilityListener implements Listener {
 
     @EventHandler public void onWorldChange(PlayerChangedWorldEvent event) {
         Player player = event.getPlayer();
+        counterWindows.remove(player.getUniqueId());
         recentPlayerAttacker.remove(player.getUniqueId());
         recentPlayerAttackAt.remove(player.getUniqueId());
         clearOpponentLinks(player.getUniqueId());
@@ -237,13 +232,20 @@ final class VanguardAbilityListener implements Listener {
 
     private void triggerBloodthirst(Player defender) {
         VanguardProgression.PlayerData data = progress.get(defender.getUniqueId());
+        long previousReadyAt = data.bloodthirstReadyAt;
         data.bloodthirstReadyAt = System.currentTimeMillis()
-                + plugin.getConfig().getLong("vanguard.bloodthirst.cooldown-seconds", 45) * 1000L;
-        progress.save(defender.getUniqueId());
+                + plugin.getConfig().getLong("vanguard.bloodthirst.cooldown-seconds", 30) * 1000L;
+        try {
+            progress.save(defender.getUniqueId());
+        } catch (RuntimeException ex) {
+            data.bloodthirstReadyAt = previousReadyAt;
+            plugin.getLogger().severe("Could not save Bloodthirst cooldown for " + defender.getUniqueId() + ": " + ex.getMessage());
+            defender.sendMessage(plugin.message("&cBloodthirst triggered, but its cooldown could not be saved."));
+        }
         plugin.getServer().getScheduler().runTask(plugin, () -> {
             if (defender.isOnline() && !defender.isDead()) {
-            double maximum = defender.getAttribute(org.bukkit.attribute.Attribute.MAX_HEALTH).getValue();
-                defender.setHealth(maximum);
+                var maxHealth = defender.getAttribute(org.bukkit.attribute.Attribute.MAX_HEALTH);
+                if (maxHealth != null) defender.setHealth(maxHealth.getValue());
             }
         });
         defender.sendMessage(plugin.message("&bBloodthirst counter! You recovered health."));
@@ -299,6 +301,7 @@ final class VanguardAbilityListener implements Listener {
     }
 
     void shutdown() {
+        counterWindows.clear();
         for (UUID id : Set.copyOf(activeUltimates)) {
             Player player = plugin.getServer().getPlayer(id);
             if (player != null) finishUltimate(player);
@@ -393,11 +396,6 @@ final class VanguardAbilityListener implements Listener {
         return item != null && (item.getType().name().endsWith("_SWORD") || item.getType().name().endsWith("_AXE"));
     }
     private long counterWindowMillis(VanguardProgression.Upgrade upgrade) {
-        return switch (upgrade) {
-            case DORMANT -> plugin.getConfig().getLong("vanguard.bloodthirst.dormant-window-ms", 750);
-            case IMPERFECT -> plugin.getConfig().getLong("vanguard.bloodthirst.imperfect-window-ms", 1000);
-            case PERFECT -> plugin.getConfig().getLong("vanguard.bloodthirst.perfect-window-ms", 1250);
-            case ASCENDANT -> plugin.getConfig().getLong("vanguard.bloodthirst.ascendant-window-ms", 1500);
-        };
+        return VanguardRules.bloodthirstWindowMillis(upgrade);
     }
 }

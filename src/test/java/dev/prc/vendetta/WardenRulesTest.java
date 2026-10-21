@@ -18,7 +18,13 @@ class WardenRulesTest {
 
     @Test void cardsCapAtFiftyAndCaptureUsesThreeDimensionalDistance() {
         assertEquals(1.0, WardenRules.cardMultiplier(0));
-        assertEquals(1.5, WardenRules.cardMultiplier(100));
+        assertEquals(1.01, WardenRules.cardMultiplier(1), 0.000001);
+        assertEquals(1.05, WardenRules.cardMultiplier(5), 0.000001);
+        assertEquals(1.18, WardenRules.cardMultiplier(18), 0.000001);
+        assertEquals(1.50, WardenRules.cardMultiplier(50), 0.000001);
+        assertEquals(1.50, WardenRules.cardMultiplier(100), 0.000001);
+        assertEquals("&bAG Cards: &f3", WardenRules.cardDisplayLine(3));
+        assertEquals("&bAG Cards: &f0", WardenRules.cardDisplayLine(-1));
         assertTrue(WardenRules.withinCaptureEscapeRadius(10_000));
         assertFalse(WardenRules.withinCaptureEscapeRadius(10_001));
     }

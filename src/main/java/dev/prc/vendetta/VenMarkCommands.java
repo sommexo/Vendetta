@@ -173,11 +173,9 @@ final class VenMarkCommands implements BasicCommand {
                     "Bloodthirst — Counter",
                     "A timed Vanguard counter that heals Vanguard to full after a successful trigger.",
                     "Right-click a sword, then crouch when a qualifying attack lands.",
-                    plugin.getConfig().getLong("vanguard.bloodthirst.cooldown-seconds", 45) + " seconds from arming; a successful counter resets it.",
+                    plugin.getConfig().getLong("vanguard.bloodthirst.cooldown-seconds", 30) + " seconds; a failed counter also consumes it.",
                     plugin.getConfig().getLong("vanguard.bloodthirst.dormant-window-ms", 750) / 1000.0 + " seconds Dormant; "
-                            + plugin.getConfig().getLong("vanguard.bloodthirst.imperfect-window-ms", 1000) / 1000.0 + " seconds Imperfect; "
-                            + plugin.getConfig().getLong("vanguard.bloodthirst.perfect-window-ms", 1250) / 1000.0 + " seconds Perfect; "
-                            + plugin.getConfig().getLong("vanguard.bloodthirst.ascendant-window-ms", 1500) / 1000.0 + " seconds Ascendant."
+                            + plugin.getConfig().getLong("vanguard.bloodthirst.imperfect-window-ms", 1000) / 1000.0 + " seconds Imperfect.",
                     "The triggering hit still deals damage; a successful counter restores full health.",
                     "Requires a sword, crouching at the correct moment, and a qualifying direct attack.");
             case "ultimate" -> new AbilityDetails(
@@ -198,9 +196,9 @@ final class VenMarkCommands implements BasicCommand {
             case "predators-instinct" -> new AbilityDetails(
                     "Predator's Instinct — Counter", "Phantom's timed counter and repositioning ability.",
                     "Right-click a sword to arm for 1 second, then crouch as an attack lands.",
-                    "45 seconds after triggering.", "Blindness and full movement immobilization last 5 seconds.",
+                    "20 seconds after triggering.", "Blindness and movement stun last 5 seconds.",
                     "The triggering hit deals zero damage. With a mace anywhere in inventory, Phantom teleports above the attacker; otherwise behind them.",
-                    "One trigger per activation. A cooldown save failure prevents the counter from triggering. Ascendant Into the Void adds Afterimage.");
+                    "One trigger per activation. The stunned attacker may still attack. Ascendant Into the Void adds Afterimage.");
             case "marked-prey" -> new AbilityDetails(
                     "Marked Prey — Passive", "Attackers who hit Phantom receive Glowing.",
                     "Passive; no activation input.", "None.", "6 seconds Dormant, 9 Imperfect, 15 Perfect.",
@@ -228,7 +226,7 @@ final class VenMarkCommands implements BasicCommand {
                     "Ancient Guardian — Ultimate", "Warden area-control ultimate with capture and team effects.",
                     "Left-click a shield.", "15 minutes.",
                     "Until combat ends; effect durations cycle 3 seconds, 2 seconds, 1 second, then repeat.",
-                    "Capture radius: 30 blocks Dormant/Imperfect, 40 Perfect, 50 Ascendant. Warden/allies receive Resistance II; enemies Weakness I. Captured enemies share a fixed 100-block escape radius. Cards add 0.01x damage up to 1.5x.",
+                    "Capture radius: 30 blocks Dormant/Imperfect, 40 Perfect, 50 Ascendant. Warden/allies receive Resistance II; enemies Weakness I. Captured enemies share a fixed 100-block escape radius. Cards add 0.1x incoming damage per card up to 1.5x.",
                     "Captured enemies can move, mine, build, and interact. Reactivation refreshes and resets cards.");
             case "unyielding" -> new AbilityDetails(
                     "Unyielding — Ascendant Bonus", "Ancient Guardian's Ascendant emergency defense.",
@@ -261,12 +259,9 @@ final class VenMarkCommands implements BasicCommand {
                 title = "Bloodthirst — Counter";
                 description = "Right-click with a sword to arm, then crouch when hit. Dormant window: "
                         + plugin.getConfig().getLong("vanguard.bloodthirst.dormant-window-ms", 750) / 1000.0
-                        + "s; Imperfect: " + plugin.getConfig().getLong("vanguard.bloodthirst.imperfect-window-ms", 1000) / 1000.0
-                        + "s; Perfect: " + plugin.getConfig().getLong("vanguard.bloodthirst.perfect-window-ms", 1250) / 1000.0
-                        + "s; Ascendant: " + plugin.getConfig().getLong("vanguard.bloodthirst.ascendant-window-ms", 1500) / 1000.0
-                        + "s. The hit still deals damage; a successful counter heals to full. Cooldown: "
-                        + plugin.getConfig().getLong("vanguard.bloodthirst.cooldown-seconds", 45)
-                        + "s from arming, reset on a successful counter.";
+                        + "s; Imperfect window: " + plugin.getConfig().getLong("vanguard.bloodthirst.imperfect-window-ms", 1000) / 1000.0
+                        + "s. The hit still deals damage; a successful counter heals to full. A missed window starts a full cooldown of "
+                        + plugin.getConfig().getLong("vanguard.bloodthirst.cooldown-seconds", 30) + "s.";
             }
             case "into-the-void" -> {
                 title = "Into the Void â€” Ultimate";
@@ -274,7 +269,7 @@ final class VenMarkCommands implements BasicCommand {
             }
             case "predators-instinct" -> {
                 title = "Predator's Instinct — Counter";
-                description = "Right-click with a sword to arm for 1 second, then crouch as an attack lands. The counter nullifies that hit, blinds and fully immobilizes the attacker for 5 seconds, and has a 45-second cooldown after triggering. If saving the cooldown fails, the counter does not trigger. Ascendant Into the Void grants Afterimage: Speed III for 12 seconds after a successful counter.";
+                description = "Right-click with a sword to arm for 1 second, then crouch as an attack lands. The counter nullifies that hit, blinds and stuns the attacker for 5 seconds, and has a 20-second cooldown. Ascendant Into the Void grants Afterimage: Speed III for 12 seconds after a successful counter.";
             }
             case "marked-prey" -> {
                 title = "Marked Prey — Passive";

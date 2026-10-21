@@ -18,7 +18,7 @@ final class ClassProgression {
 
     ClassProgression(File dataFolder) {
         file = new File(dataFolder, "class-abilities.yml");
-        yaml = YamlConfiguration.loadConfiguration(file);
+        yaml = SafeYaml.load(file);
         for (String id : yaml.getKeys(false)) {
             try {
                 UUID uuid = UUID.fromString(id);
@@ -56,7 +56,7 @@ final class ClassProgression {
             yaml.set(uuid + ".abilities." + entry.getKey(), entry.getValue().name());
         for (Map.Entry<String, Long> entry : cooldowns.computeIfAbsent(uuid, ignored -> new HashMap<>()).entrySet())
             yaml.set(uuid + ".cooldowns." + entry.getKey(), entry.getValue());
-        try { yaml.save(file); }
+        try { SafeYaml.saveAtomically(yaml, file); }
         catch (IOException ex) { throw new IllegalStateException("Could not save class ability progression", ex); }
     }
 

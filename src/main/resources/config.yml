@@ -93,9 +93,7 @@ vanguard:
   bloodthirst:
     dormant-window-ms: 750
     imperfect-window-ms: 1000
-    perfect-window-ms: 1250
-    ascendant-window-ms: 1500
-    cooldown-seconds: 45
+    cooldown-seconds: 30
   ultimate:
     dormant-cooldown-seconds: 240
     awakened-cooldown-seconds: 480
@@ -114,6 +112,7 @@ vanguard:
     ascendant-strength-refresh-seconds: 60
 settings:
   opCooldownBypass: false
+  triggerableAngelEscapes: false
 relics:
   exploration-drop-chance: 0.002
   exploration-perfect-chance: 0.05
@@ -127,3 +126,33 @@ bounties:
   value:
     diamond: 1
     nether-star: 9
+
+# Special relic villagers spawn in batches. Each villager has a fixed trade list.
+relic-villagers:
+  interval-minutes: 60
+  batch-size: 8
+  lifetime-minutes: 15
+  search-radius-chunks: 96
+  structures:
+    RUINED_PORTAL_DESERT: {weight: 2}
+    RUINED_PORTAL_JUNGLE: {weight: 1}
+    RUINED_PORTAL_MOUNTAIN: {weight: 1}
+    RUINED_PORTAL_OCEAN: {weight: 1}
+    PILLAGER_OUTPOST: {weight: 4}
+    VILLAGE_PLAINS: {weight: 5}
+    DESERT_PYRAMID: {weight: 3}
+    OCEAN_MONUMENT: {weight: 2}
+    END_CITY: {weight: 2}
+  # Optional fixed Wanderer offers. Each entry needs an ItemStack serialized by Bukkit's
+  # ItemStack#serialize() at `item` and a positive `marks` price. The sample uses a normal
+  # PAPER stack only to demonstrate the YAML format; replace it with your real custom item.
+  # Offers are sampled once when that Wanderer spawns, and invalid entries are skipped.
+  # Example:
+  # wanderer-custom-offers:
+  #   sample:
+  #     marks: 500
+  #     item:
+  #       ==: org.bukkit.inventory.ItemStack
+  #       type: PAPER
+  #       amount: 1
+  wanderer-custom-offers: {}
